@@ -337,6 +337,8 @@ def estimate_daily_extremes(station_id, obs_limit=8):
     today_obs = get_observation_history(station_id, start=midnight, end=now)
     observed_high = today_obs["temp_f"].max()
     observed_low = today_obs["temp_f"].min()
+    observed_high_time = today_obs.loc[today_obs["temp_f"].idxmax(), "time"]
+    observed_low_time = today_obs.loc[today_obs["temp_f"].idxmin(), "time"]
 
     sunrise_today, sunset_today = get_sun_times(lat, lon, today)
     peak_today = sunrise_today + (sunset_today - sunrise_today) * 0.65
@@ -380,13 +382,15 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         "station": station_id.upper(),
         "station_name": name,
         "estimated_high_f": round(estimated_high, 1),
-        "estimated_high_time": high_time,
-        "estimated_low_time": low_time,
+        "estimated_high_time": high_time,  # theoretical peak-heat hour for today, from sun position - not tied to when the observed high actually occurred
+        "estimated_low_time": low_time,  # theoretical sunrise (today's or tomorrow's) - not tied to when the observed low actually occurred
         "high_status": high_status,
         "estimated_low_f": round(estimated_low, 1),
         "low_status": low_status,
-        "observed_high_so_far_f": round(observed_high, 1),
-        "observed_low_so_far_f": round(observed_low, 1),
+        "observed_high_so_far_f": round(observed_high, 2),
+        "observed_high_so_far_time": observed_high_time,  # when that actual high was recorded
+        "observed_low_so_far_f": round(observed_low, 2),
+        "observed_low_so_far_time": observed_low_time,  # when that actual low was recorded
     }
 
 

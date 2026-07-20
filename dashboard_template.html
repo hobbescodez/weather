@@ -4,8 +4,8 @@
     --text-strong: #ffffff;
     --text-soft: rgba(255, 255, 255, 0.82);
     --text-faint: rgba(255, 255, 255, 0.56);
-    --accent-warm: #ffc94d;
-    --accent-warm-soft: rgba(255, 201, 77, 0.85);
+    --accent-warm: #f5a623;
+    --accent-warm-soft: rgba(245, 166, 35, 0.85);
     --glass-bg: rgba(255, 255, 255, 0.15);
     --glass-bg-strong: rgba(255, 255, 255, 0.22);
     --glass-border: rgba(255, 255, 255, 0.26);
@@ -122,9 +122,19 @@
     font-size: 16px;
     font-weight: 500;
     font-variant-numeric: tabular-nums;
+    color: var(--text-strong);
   }
-  .hilo-high { color: var(--accent-warm); }
-  .hilo-low { color: var(--text-soft); }
+  .hilo-arrow-high { color: var(--accent-warm); }
+  .hilo-arrow-low { color: var(--text-soft); }
+  .dot-warm {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent-warm);
+    margin-right: 7px;
+    vertical-align: middle;
+  }
 
   .glass {
     background: var(--glass-bg);
@@ -154,7 +164,7 @@
   .estimate-value {
     font-size: 30px;
     font-weight: 500;
-    color: var(--accent-warm);
+    color: var(--text-strong);
     font-variant-numeric: tabular-nums;
   }
   .estimate-label {
@@ -222,8 +232,7 @@
     font-size: 14px;
   }
   .hilo-detail-arrow { font-weight: 700; width: 14px; }
-  .hilo-detail .hilo-high { font-weight: 600; }
-  .hilo-detail .hilo-low { font-weight: 600; color: var(--text-strong); }
+  .hilo-value { font-weight: 600; color: var(--text-strong); font-variant-numeric: tabular-nums; }
   .hilo-detail-caption { color: var(--text-faint); }
 
   .stats {
@@ -249,20 +258,20 @@
   .chip {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 6px;
     font-size: 17px;
     font-weight: 500;
+    color: var(--text-strong);
   }
   .chip::before {
     content: "";
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: currentColor;
+    background: var(--text-faint);
   }
-  .chip-neutral { color: var(--text-soft); }
-  .chip-warn { color: var(--accent-warm); }
-  .chip-good { color: var(--text-strong); }
+  .chip-warn::before { background: var(--accent-warm); }
+  .chip-good::before { background: var(--text-strong); }
 
   .data-links {
     display: flex;
@@ -311,15 +320,15 @@
       <div class="hero-condition">{{condition_text}}</div>
       <div class="hero-temp">{{current_temp}}<sup>°F</sup></div>
       <div class="hero-hilo">
-        <span class="hilo-high">↑{{daily_high}}°</span>
-        <span class="hilo-low">↓{{daily_low}}°</span>
+        <span><span class="hilo-arrow-high">↑</span>{{daily_high}}°</span>
+        <span><span class="hilo-arrow-low">↓</span>{{daily_low}}°</span>
       </div>
     </div>
 
     <div class="glass">
       <div class="module-label">Trend</div>
       <div class="estimate-row">
-        <span class="estimate-value">{{estimated_temp}}°</span>
+        <span class="estimate-value"><span class="dot-warm"></span>{{estimated_temp}}°</span>
         <span class="estimate-label">by {{target_time}}<br>{{trend_per_hr}}°/hr, damped</span>
       </div>
       <div class="range-row">
@@ -341,17 +350,30 @@
     </div>
 
     <div class="glass">
-      <div class="module-label">Today's extremes, by the sun</div>
+      <div class="module-label">Estimated hottest/coldest time of day</div>
       <div class="hilo-detail-row">
         <div class="hilo-detail">
-          <span class="hilo-detail-arrow hilo-high">↑</span>
-          <span class="hilo-high">{{daily_high}}°</span>
-          <span class="hilo-detail-caption">{{daily_high_caption}} · ~{{daily_high_time}}</span>
+          <span class="hilo-detail-arrow hilo-arrow-high">↑</span>
+          <span class="hilo-value">{{daily_high}}°</span>
+          <span class="hilo-detail-caption">{{daily_high_caption}} · est. peak ~{{est_peak_time}}</span>
         </div>
         <div class="hilo-detail">
-          <span class="hilo-detail-arrow hilo-low">↓</span>
-          <span class="hilo-low">{{daily_low}}°</span>
-          <span class="hilo-detail-caption">{{daily_low_caption}} · ~{{daily_low_time}}</span>
+          <span class="hilo-detail-arrow hilo-arrow-low">↓</span>
+          <span class="hilo-value">{{daily_low}}°</span>
+          <span class="hilo-detail-caption">{{daily_low_caption}} · est. trough ~{{est_trough_time}}</span>
+        </div>
+      </div>
+      <div class="module-label" style="margin-top: 16px;">Actual so far today</div>
+      <div class="hilo-detail-row">
+        <div class="hilo-detail">
+          <span class="hilo-detail-arrow hilo-arrow-high">↑</span>
+          <span class="hilo-value">{{observed_high}}°</span>
+          <span class="hilo-detail-caption">recorded at {{observed_high_time}}</span>
+        </div>
+        <div class="hilo-detail">
+          <span class="hilo-detail-arrow hilo-arrow-low">↓</span>
+          <span class="hilo-value">{{observed_low}}°</span>
+          <span class="hilo-detail-caption">recorded at {{observed_low_time}}</span>
         </div>
       </div>
     </div>
