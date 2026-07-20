@@ -79,24 +79,43 @@ def get_observation_history(station_id, limit=8, start=None, end=None):
     so this can also be used to pull a historical window for backtesting.
     """
     url = f"https://api.weather.gov/stations/{station_id.upper()}/observations"
-    params = {}
+
     if start is not None and end is not None:
-        params["start"] = start.astimezone(UTC).isoformat()
-        params["end"] = end.astimezone(UTC).isoformat()
-        params["limit"] = 500
+        # The API returns at most 500 observations per request, newest first,
+        # and exposes a `pagination.next` cursor URL for older pages. A busy
+        # station (e.g. KSEA reports every few minutes) can blow past 500
+        # observations well within a multi-day window, so page backwards
+        # until we've covered the requested start time.
+        page_url = url
+        page_params = {
+            "start": start.astimezone(UTC).isoformat(),
+            "end": end.astimezone(UTC).isoformat(),
+            "limit": 500,
+        }
+        features = []
+        for _ in range(20):  # safety cap: 10,000 observations
+            r = requests.get(page_url, headers={"Accept": "application/geo+json"}, params=page_params)
+            r.raise_for_status()
+            data = r.json()
+            page_features = data["features"]
+            features.extend(page_features)
+
+            oldest_ts = datetime.fromisoformat(page_features[-1]["properties"]["timestamp"].replace("Z", "+00:00")) if page_features else None
+            next_url = data.get("pagination", {}).get("next")
+            if not next_url or oldest_ts is None or oldest_ts <= start.astimezone(UTC):
+                break
+            page_url = next_url
+            page_params = {"limit": 500}  # cursor URL carries the rest of the query
+        else:
+            warnings.warn(
+                f"Stopped paging observations for {station_id.upper()} after 10,000 records "
+                f"without reaching {start}; the window may still be truncated."
+            )
     else:
-        params["limit"] = limit
-
-    r = requests.get(url, headers={"Accept": "application/geo+json"}, params=params)
-    r.raise_for_status()
-    features = r.json()["features"]
-
-    if len(features) >= params["limit"]:
-        warnings.warn(
-            f"Received {len(features)} observations for {station_id.upper()}, "
-            f"which is at or above the API limit of {params['limit']}. "
-            "The requested window may be truncated; try a shorter lookback."
-        )
+        params = {"limit": limit}
+        r = requests.get(url, headers={"Accept": "application/geo+json"}, params=params)
+        r.raise_for_status()
+        features = r.json()["features"]
 
     rows = []
     for f in features:
