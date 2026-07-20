@@ -1,0 +1,390 @@
+<title>KSEA — Sea-Tac Temperature Estimate</title>
+<style>
+  :root {
+    --bg: #eef2ec;
+    --bg-grain: #e4ebe3;
+    --surface: #ffffff;
+    --ink: #16241c;
+    --ink-soft: #55645a;
+    --ink-faint: #8b988e;
+    --accent: #2f6f5e;
+    --accent-soft: #dceae3;
+    --sky: #5d7e93;
+    --sky-soft: #dfe8ec;
+    --line: #d9e1da;
+    --warn: #a56425;
+    --warn-soft: #f3e3d2;
+    --good: #2f6f5e;
+    --good-soft: #dceae3;
+    --shadow: 0 1px 2px rgba(22, 36, 28, 0.04), 0 8px 24px rgba(22, 36, 28, 0.06);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0c130f;
+      --bg-grain: #101a14;
+      --surface: #152019;
+      --ink: #e8efe9;
+      --ink-soft: #9fb0a6;
+      --ink-faint: #66766c;
+      --accent: #5bcda8;
+      --accent-soft: #1b3229;
+      --sky: #93b9cd;
+      --sky-soft: #1a2b32;
+      --line: #24342b;
+      --warn: #e2a05f;
+      --warn-soft: #33281a;
+      --good: #5bcda8;
+      --good-soft: #1b3229;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #0c130f;
+    --bg-grain: #101a14;
+    --surface: #152019;
+    --ink: #e8efe9;
+    --ink-soft: #9fb0a6;
+    --ink-faint: #66766c;
+    --accent: #5bcda8;
+    --accent-soft: #1b3229;
+    --sky: #93b9cd;
+    --sky-soft: #1a2b32;
+    --line: #24342b;
+    --warn: #e2a05f;
+    --warn-soft: #33281a;
+    --good: #5bcda8;
+    --good-soft: #1b3229;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
+  }
+
+  :root[data-theme="light"] {
+    --bg: #eef2ec;
+    --bg-grain: #e4ebe3;
+    --surface: #ffffff;
+    --ink: #16241c;
+    --ink-soft: #55645a;
+    --ink-faint: #8b988e;
+    --accent: #2f6f5e;
+    --accent-soft: #dceae3;
+    --sky: #5d7e93;
+    --sky-soft: #dfe8ec;
+    --line: #d9e1da;
+    --warn: #a56425;
+    --warn-soft: #f3e3d2;
+    --good: #2f6f5e;
+    --good-soft: #dceae3;
+    --shadow: 0 1px 2px rgba(22, 36, 28, 0.04), 0 8px 24px rgba(22, 36, 28, 0.06);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+    background:
+      radial-gradient(ellipse 900px 500px at 15% -10%, var(--bg-grain), transparent),
+      var(--bg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+  }
+
+  .card {
+    width: 100%;
+    max-width: 640px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    box-shadow: var(--shadow);
+    padding: 36px clamp(20px, 5vw, 44px) 32px;
+  }
+
+  .eyebrow {
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  .header {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 28px;
+  }
+
+  h1 {
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    font-weight: 500;
+    font-size: clamp(22px, 4.5vw, 27px);
+    margin: 2px 0 0;
+    text-wrap: balance;
+    color: var(--ink);
+  }
+
+  .asof {
+    font-size: 13px;
+    color: var(--ink-soft);
+    margin-top: 2px;
+  }
+
+  .readout {
+    display: flex;
+    align-items: center;
+    gap: clamp(10px, 3vw, 22px);
+    padding: 8px 0 22px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 22px;
+  }
+
+  .temp-block { flex: 1; min-width: 0; }
+  .temp-block .label {
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-bottom: 2px;
+  }
+
+  .temp-value {
+    font-family: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: clamp(40px, 11vw, 58px);
+    font-weight: 500;
+    line-height: 1;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+
+  .temp-value.estimate { color: var(--accent); }
+  .temp-value sup {
+    font-size: 0.42em;
+    top: -0.55em;
+    font-weight: 400;
+  }
+
+  .temp-sub {
+    font-size: 12.5px;
+    color: var(--ink-soft);
+    margin-top: 4px;
+  }
+
+  .arrow {
+    font-size: 20px;
+    color: var(--ink-faint);
+    align-self: center;
+    padding-top: 18px;
+  }
+
+  .range-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+
+  .range-label {
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  .range-values {
+    font-family: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 14px;
+    color: var(--ink-soft);
+  }
+
+  .confidence-bar {
+    position: relative;
+    height: 8px;
+    border-radius: 5px;
+    background: var(--sky-soft);
+    margin-bottom: 26px;
+    overflow: visible;
+  }
+
+  .confidence-fill {
+    position: absolute;
+    top: 0; left: 0; height: 100%;
+    border-radius: 5px;
+    background: linear-gradient(90deg, var(--sky), var(--accent));
+  }
+
+  .confidence-marker {
+    position: absolute;
+    top: -3px;
+    width: 2px;
+    height: 14px;
+    background: var(--ink);
+    border-radius: 1px;
+  }
+
+  .section-label {
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-bottom: 10px;
+  }
+
+  .spark-wrap { margin-bottom: 26px; }
+
+  .sparkline { width: 100%; height: auto; display: block; }
+  .spark-area { fill: var(--accent-soft); opacity: 0.6; }
+  .spark-line { fill: none; stroke: var(--sky); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+  .spark-proj { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linecap: round; stroke-dasharray: 1 7; }
+  .spark-now-dot { fill: var(--surface); stroke: var(--sky); stroke-width: 2; }
+  .spark-est-dot { fill: var(--accent); }
+
+  .spark-caption {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11.5px;
+    color: var(--ink-faint);
+    margin-top: 6px;
+  }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 10px;
+  }
+
+  .stat {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+
+  .stat .label {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-bottom: 5px;
+  }
+
+  .stat .value {
+    font-family: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 17px;
+    color: var(--ink);
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    padding: 1px 0;
+  }
+
+  .chip::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .chip-neutral { color: var(--ink-soft); }
+  .chip-warn { color: var(--warn); }
+  .chip-good { color: var(--good); }
+
+  .footer {
+    margin-top: 26px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--ink-faint);
+    line-height: 1.5;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .card { animation: rise 0.4s ease-out; }
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  }
+</style>
+
+<div class="card">
+  <div class="header">
+    <span class="eyebrow">Sea-Tac Airport · {{station_id}}</span>
+    <h1>{{station_name}}</h1>
+    <span class="asof">As of {{as_of_time}} · {{as_of_date}}</span>
+  </div>
+
+  <div class="readout">
+    <div class="temp-block">
+      <div class="label">Now</div>
+      <div class="temp-value">{{current_temp}}<sup>°F</sup></div>
+      <div class="temp-sub">{{current_temp_precise}}° exact</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="temp-block">
+      <div class="label">Est. {{target_time}}</div>
+      <div class="temp-value estimate">{{estimated_temp}}<sup>°F</sup></div>
+      <div class="temp-sub">{{trend_per_hr}}°/hr trend, damped</div>
+    </div>
+  </div>
+
+  <div class="range-row">
+    <span class="range-label">Likely range in {{hours_ahead}}h</span>
+    <span class="range-values">{{range_low}}°–{{range_high}}° (±{{band_width}}°)</span>
+  </div>
+  <div class="confidence-bar">
+    <div class="confidence-fill" style="width: {{confidence_pct}}%;"></div>
+  </div>
+
+  <div class="spark-wrap">
+    <div class="section-label">Last {{sparkline_hours}}h + projection</div>
+    {{sparkline_svg}}
+    <div class="spark-caption">
+      <span>{{sparkline_hours}}h ago</span>
+      <span>{{target_time}}</span>
+    </div>
+  </div>
+
+  <div class="section-label">Conditions</div>
+  <div class="stats">
+    <div class="stat">
+      <div class="label">Wind</div>
+      <div class="value">{{wind_mph}} mph</div>
+    </div>
+    <div class="stat">
+      <div class="label">Cloud cover</div>
+      <div class="value">{{cloud_label}}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Pressure</div>
+      <div class="value"><span class="chip {{pressure_class}}">{{pressure_label}}</span></div>
+    </div>
+    <div class="stat">
+      <div class="label">Confidence</div>
+      <div class="value">{{confidence_pct}}%</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    Model estimate from {{n_observations}} recent station observations — not an official NWS forecast. Refreshes on a schedule; numbers reflect the last refresh, not this exact moment.
+  </div>
+</div>
