@@ -116,6 +116,7 @@ def main():
     obs_json_url = f"https://api.weather.gov/stations/{STATION}/observations"
     obhistory_url = f"https://forecast.weather.gov/data/obhistory/{STATION}.html"
     forecast_url = f"https://forecast.weather.gov/MapClick.php?lat={lat:.4f}&lon={lon:.4f}"
+    timeseries_url = f"https://www.weather.gov/wrh/timeseries?site={STATION}"
 
     ctx = {
         "station_name": est["station_name"],
@@ -148,6 +149,7 @@ def main():
         "obs_json_url": obs_json_url,
         "obhistory_url": obhistory_url,
         "forecast_url": forecast_url,
+        "timeseries_url": timeseries_url,
     }
 
     with open("dashboard_template.html", "r") as f:
