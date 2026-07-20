@@ -134,6 +134,40 @@
     margin-top: 2px;
   }
 
+  .hilo-row {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 22px;
+  }
+
+  .hilo {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--ink-soft);
+  }
+
+  .hilo-arrow {
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .hilo-up { color: var(--warn); }
+  .hilo-down { color: var(--sky); }
+
+  .hilo-value {
+    font-family: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  .hilo-caption {
+    color: var(--ink-faint);
+  }
+
   .readout {
     display: flex;
     align-items: center;
@@ -308,6 +342,27 @@
   .chip-warn { color: var(--warn); }
   .chip-good { color: var(--good); }
 
+  .data-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    margin-bottom: 4px;
+  }
+
+  .data-links a {
+    font-size: 13px;
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+  }
+
+  .data-links a:hover { border-bottom-color: var(--accent); }
+  .data-links a:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+
   .footer {
     margin-top: 26px;
     padding-top: 16px;
@@ -331,6 +386,19 @@
     <span class="eyebrow">Sea-Tac Airport · {{station_id}}</span>
     <h1>{{station_name}}</h1>
     <span class="asof">As of {{as_of_time}} · {{as_of_date}}</span>
+  </div>
+
+  <div class="hilo-row">
+    <div class="hilo">
+      <span class="hilo-arrow hilo-up">↑</span>
+      <span class="hilo-value">{{daily_high}}°</span>
+      <span class="hilo-caption">{{daily_high_caption}}</span>
+    </div>
+    <div class="hilo">
+      <span class="hilo-arrow hilo-down">↓</span>
+      <span class="hilo-value">{{daily_low}}°</span>
+      <span class="hilo-caption">{{daily_low_caption}}</span>
+    </div>
   </div>
 
   <div class="readout">
@@ -382,6 +450,13 @@
       <div class="label">Confidence</div>
       <div class="value">{{confidence_pct}}%</div>
     </div>
+  </div>
+
+  <div class="section-label">Verify the data</div>
+  <div class="data-links">
+    <a href="{{obs_json_url}}" target="_blank" rel="noopener">Raw station data (JSON)</a>
+    <a href="{{obhistory_url}}" target="_blank" rel="noopener">NWS observation history</a>
+    <a href="{{forecast_url}}" target="_blank" rel="noopener">Official NWS forecast</a>
   </div>
 
   <div class="footer">

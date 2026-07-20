@@ -8,7 +8,12 @@ Run standalone to regenerate dashboard.html in this directory:
 import json
 from datetime import timedelta
 
-from weather_estimator import estimate_temp, get_station_location, get_observation_history
+from weather_estimator import (
+    estimate_temp,
+    estimate_daily_extremes,
+    get_station_location,
+    get_observation_history,
+)
 
 STATION = "KSEA"
 HOURS_AHEAD = 3
@@ -74,8 +79,19 @@ def pressure_chip(trend):
     return ("steady", "chip-neutral")
 
 
+HIGH_CAPTIONS = {
+    "observed": "today's high so far",
+    "projected": "projected for today's peak-heat hour",
+}
+LOW_CAPTIONS = {
+    "today": "today's overnight low, almost here",
+    "tonight": "expected low tonight",
+}
+
+
 def main():
     est = estimate_temp(STATION, hours_ahead=HOURS_AHEAD)
+    extremes = estimate_daily_extremes(STATION)
     lat, lon, _ = get_station_location(STATION)
 
     now = est["as_of"]
@@ -96,6 +112,10 @@ def main():
     cloud_label = f"{round(cloud_pct * 100)}%" if cloud_pct is not None else "—"
 
     confidence_pct = round(est["diurnal_damping"] * est["sky_wind_damping"] * 100)
+
+    obs_json_url = f"https://api.weather.gov/stations/{STATION}/observations"
+    obhistory_url = f"https://forecast.weather.gov/data/obhistory/{STATION}.html"
+    forecast_url = f"https://forecast.weather.gov/MapClick.php?lat={lat:.4f}&lon={lon:.4f}"
 
     ctx = {
         "station_name": est["station_name"],
@@ -121,6 +141,13 @@ def main():
         "sparkline_svg": svg,
         "sparkline_hours": SPARKLINE_HOURS,
         "data_json": json.dumps(est, default=str, indent=2),
+        "daily_high": f"{extremes['estimated_high_f']:.0f}",
+        "daily_high_caption": HIGH_CAPTIONS[extremes["high_status"]],
+        "daily_low": f"{extremes['estimated_low_f']:.0f}",
+        "daily_low_caption": LOW_CAPTIONS[extremes["low_status"]],
+        "obs_json_url": obs_json_url,
+        "obhistory_url": obhistory_url,
+        "forecast_url": forecast_url,
     }
 
     with open("dashboard_template.html", "r") as f:

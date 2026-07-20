@@ -14,7 +14,7 @@ import warnings
 import requests
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, time
 from zoneinfo import ZoneInfo
 from astral import LocationInfo
 from astral.sun import sun
@@ -227,6 +227,16 @@ def _pressure_trend_and_uncertainty(df, elapsed_hours, hours_ahead):
     return round(p_slope, 4), round(uncertainty, 1)
 
 
+# A short local trend (fit over the last handful of observations) is only a
+# credible predictor a few hours out. Projections further ahead than this
+# still use the real hours_ahead for figuring out *where* in the diurnal
+# cycle the target time falls, but the trend's contribution to the magnitude
+# of the change is capped at this many hours - otherwise a small slope
+# measured over the last 20 minutes gets multiplied out to an absurd swing
+# over a 12+ hour projection (e.g. projecting to the next sunrise).
+TREND_HORIZON_HOURS = 6
+
+
 def estimate_from_df(df, hours_ahead, lat, lon):
     """Core estimation logic, given a dataframe of observations. Reused by both
     the live estimator and the backtest."""
@@ -250,7 +260,7 @@ def estimate_from_df(df, hours_ahead, lat, lon):
 
     pressure_trend, uncertainty_f = _pressure_trend_and_uncertainty(df, elapsed_hours, hours_ahead)
 
-    raw_change = slope * hours_ahead
+    raw_change = slope * min(hours_ahead, TREND_HORIZON_HOURS)
     damped_change = raw_change * combined_damping + spread_adjustment * np.sign(raw_change) * -1
 
     estimated_temp = latest["temp_f"] + damped_change
@@ -282,6 +292,84 @@ def estimate_temp(station_id, hours_ahead=3, obs_limit=8):
     result["station"] = station_id.upper()
     result["station_name"] = name
     return result
+
+
+def estimate_daily_extremes(station_id, obs_limit=8):
+    """
+    Estimate today's high and the next overnight low.
+
+    An extreme that has already happened today is just the observed value -
+    no model needed. For one still ahead:
+
+    - High: project with the same damped-trend model as estimate_temp, but
+      capped at TREND_HORIZON_HOURS out. Peak-heat hour can be many hours
+      away (e.g. checking at 6am), and this model's short local trend isn't
+      a credible predictor that far out, so this reports a near-term "at
+      least this warm" floor rather than pretending to see all the way to
+      peak.
+    - Low (only when today's low has already happened, so we're forecasting
+      the *next* one, which may be many hours away across sunset): trend
+      extrapolation has the same problem, and additionally the recent local
+      slope is often still warming at that point, which would extrapolate
+      into a "low" warmer than the current temperature. Instead this uses a
+      standard radiative-cooling heuristic: on a clear, calm night the
+      overnight minimum tends toward the dewpoint (further cooling slows as
+      air nears saturation); clouds/wind suppress that drop. Reuses the same
+      cloud/wind damping factor as the short-term model, just aimed at a
+      different physical effect.
+    """
+    lat, lon, name = get_station_location(station_id)
+    df = get_observation_history(station_id, limit=obs_limit)
+    now = df["time"].iloc[-1]
+    today = now.date()
+
+    midnight = datetime.combine(today, time(0, 0), tzinfo=now.tzinfo)
+    today_obs = get_observation_history(station_id, start=midnight, end=now)
+    observed_high = today_obs["temp_f"].max()
+    observed_low = today_obs["temp_f"].min()
+
+    sunrise_today, sunset_today = get_sun_times(lat, lon, today)
+    peak_today = sunrise_today + (sunset_today - sunrise_today) * 0.65
+    hour = now.hour + now.minute / 60
+
+    if hour < peak_today:
+        horizon = min(peak_today - hour, TREND_HORIZON_HOURS)
+        peak_est = estimate_from_df(df, horizon, lat, lon)
+        estimated_high = max(observed_high, peak_est["estimated_temp_f"])
+        high_status = "projected"  # today's peak-heat hour hasn't happened yet
+    else:
+        estimated_high = observed_high
+        high_status = "observed"  # today's peak-heat hour has passed
+
+    if hour < sunrise_today:
+        hours_to_low = sunrise_today - hour
+        low_est = estimate_from_df(df, hours_to_low, lat, lon)
+        estimated_low = min(observed_low, low_est["estimated_temp_f"])
+        low_status = "today"  # still before dawn; today's low is imminent
+    else:
+        latest = df.iloc[-1]
+        current_temp = latest["temp_f"]
+        current_dewpoint = latest.get("dewpoint_f")
+        if pd.notna(current_dewpoint):
+            sky_wind = _cloud_wind_damping(df)  # 0.5 (cloudy/windy) .. 1.0 (clear/calm)
+            cooling_fraction = 0.3 + 0.5 * (sky_wind - 0.5) / 0.5
+            gap = max(0.0, current_temp - current_dewpoint)
+            estimated_low = current_temp - gap * cooling_fraction
+        else:
+            estimated_low = current_temp
+        low_status = "tonight"  # today's low already happened; forecasting the next one
+
+    return {
+        "as_of": now,
+        "station": station_id.upper(),
+        "station_name": name,
+        "estimated_high_f": round(estimated_high, 1),
+        "high_status": high_status,
+        "estimated_low_f": round(estimated_low, 1),
+        "low_status": low_status,
+        "observed_high_so_far_f": round(observed_high, 1),
+        "observed_low_so_far_f": round(observed_low, 1),
+    }
 
 
 # ---------------------------------------------------------------------------
