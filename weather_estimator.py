@@ -150,6 +150,16 @@ def get_observation_history(station_id, limit=8, start=None, end=None):
 # Damping based on real sunrise/sunset
 # ---------------------------------------------------------------------------
 
+def _hour_to_datetime(base_date, hour_decimal, tzinfo):
+    """Convert a decimal hour (e.g. 15.65) on a given date into an aware datetime."""
+    h = int(hour_decimal) % 24
+    m = int(round((hour_decimal - int(hour_decimal)) * 60))
+    if m == 60:
+        m = 0
+        h = (h + 1) % 24
+    return datetime.combine(base_date, time(h, m), tzinfo=tzinfo)
+
+
 def diurnal_damping_factor(current_time, hours_ahead, lat, lon):
     """
     Multiplier applied to the raw trend. Damps hardest when the window
@@ -332,6 +342,8 @@ def estimate_daily_extremes(station_id, obs_limit=8):
     peak_today = sunrise_today + (sunset_today - sunrise_today) * 0.65
     hour = now.hour + now.minute / 60
 
+    high_time = _hour_to_datetime(today, peak_today, now.tzinfo)
+
     if hour < peak_today:
         horizon = min(peak_today - hour, TREND_HORIZON_HOURS)
         peak_est = estimate_from_df(df, horizon, lat, lon)
@@ -346,6 +358,7 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         low_est = estimate_from_df(df, hours_to_low, lat, lon)
         estimated_low = min(observed_low, low_est["estimated_temp_f"])
         low_status = "today"  # still before dawn; today's low is imminent
+        low_time = _hour_to_datetime(today, sunrise_today, now.tzinfo)
     else:
         latest = df.iloc[-1]
         current_temp = latest["temp_f"]
@@ -358,12 +371,17 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         else:
             estimated_low = current_temp
         low_status = "tonight"  # today's low already happened; forecasting the next one
+        tomorrow = today + timedelta(days=1)
+        sunrise_tomorrow, _ = get_sun_times(lat, lon, tomorrow)
+        low_time = _hour_to_datetime(tomorrow, sunrise_tomorrow, now.tzinfo)
 
     return {
         "as_of": now,
         "station": station_id.upper(),
         "station_name": name,
         "estimated_high_f": round(estimated_high, 1),
+        "estimated_high_time": high_time,
+        "estimated_low_time": low_time,
         "high_status": high_status,
         "estimated_low_f": round(estimated_low, 1),
         "low_status": low_status,

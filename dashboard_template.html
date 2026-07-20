@@ -136,7 +136,8 @@
 
   .hilo-row {
     display: flex;
-    gap: 20px;
+    flex-wrap: wrap;
+    gap: 8px 24px;
     margin-bottom: 22px;
   }
 
@@ -146,6 +147,7 @@
     gap: 6px;
     font-size: 13px;
     color: var(--ink-soft);
+    min-width: 0;
   }
 
   .hilo-arrow {
@@ -392,12 +394,12 @@
     <div class="hilo">
       <span class="hilo-arrow hilo-up">↑</span>
       <span class="hilo-value">{{daily_high}}°</span>
-      <span class="hilo-caption">{{daily_high_caption}}</span>
+      <span class="hilo-caption">{{daily_high_caption}} · ~{{daily_high_time}}</span>
     </div>
     <div class="hilo">
       <span class="hilo-arrow hilo-down">↓</span>
       <span class="hilo-value">{{daily_low}}°</span>
-      <span class="hilo-caption">{{daily_low_caption}}</span>
+      <span class="hilo-caption">{{daily_low_caption}} · ~{{daily_low_time}}</span>
     </div>
   </div>
 
