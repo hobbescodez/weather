@@ -1,222 +1,166 @@
-<title>KSEA — Sea-Tac Temperature Estimate</title>
+<title>KSEA — Sea-Tac Weather</title>
 <style>
   :root {
-    --bg: #eef2ec;
-    --bg-grain: #e4ebe3;
-    --surface: #ffffff;
-    --ink: #16241c;
-    --ink-soft: #55645a;
-    --ink-faint: #8b988e;
-    --accent: #2f6f5e;
-    --accent-soft: #dceae3;
-    --sky: #5d7e93;
-    --sky-soft: #dfe8ec;
-    --line: #d9e1da;
-    --warn: #a56425;
-    --warn-soft: #f3e3d2;
-    --good: #2f6f5e;
-    --good-soft: #dceae3;
-    --shadow: 0 1px 2px rgba(22, 36, 28, 0.04), 0 8px 24px rgba(22, 36, 28, 0.06);
-  }
-
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0c130f;
-      --bg-grain: #101a14;
-      --surface: #152019;
-      --ink: #e8efe9;
-      --ink-soft: #9fb0a6;
-      --ink-faint: #66766c;
-      --accent: #5bcda8;
-      --accent-soft: #1b3229;
-      --sky: #93b9cd;
-      --sky-soft: #1a2b32;
-      --line: #24342b;
-      --warn: #e2a05f;
-      --warn-soft: #33281a;
-      --good: #5bcda8;
-      --good-soft: #1b3229;
-      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
-    }
-  }
-
-  :root[data-theme="dark"] {
-    --bg: #0c130f;
-    --bg-grain: #101a14;
-    --surface: #152019;
-    --ink: #e8efe9;
-    --ink-soft: #9fb0a6;
-    --ink-faint: #66766c;
-    --accent: #5bcda8;
-    --accent-soft: #1b3229;
-    --sky: #93b9cd;
-    --sky-soft: #1a2b32;
-    --line: #24342b;
-    --warn: #e2a05f;
-    --warn-soft: #33281a;
-    --good: #5bcda8;
-    --good-soft: #1b3229;
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
-  }
-
-  :root[data-theme="light"] {
-    --bg: #eef2ec;
-    --bg-grain: #e4ebe3;
-    --surface: #ffffff;
-    --ink: #16241c;
-    --ink-soft: #55645a;
-    --ink-faint: #8b988e;
-    --accent: #2f6f5e;
-    --accent-soft: #dceae3;
-    --sky: #5d7e93;
-    --sky-soft: #dfe8ec;
-    --line: #d9e1da;
-    --warn: #a56425;
-    --warn-soft: #f3e3d2;
-    --good: #2f6f5e;
-    --good-soft: #dceae3;
-    --shadow: 0 1px 2px rgba(22, 36, 28, 0.04), 0 8px 24px rgba(22, 36, 28, 0.06);
+    --text-strong: #ffffff;
+    --text-soft: rgba(255, 255, 255, 0.82);
+    --text-faint: rgba(255, 255, 255, 0.56);
+    --accent-warm: #ffc94d;
+    --accent-warm-soft: rgba(255, 201, 77, 0.85);
+    --glass-bg: rgba(255, 255, 255, 0.15);
+    --glass-bg-strong: rgba(255, 255, 255, 0.22);
+    --glass-border: rgba(255, 255, 255, 0.26);
+    --glass-line: rgba(255, 255, 255, 0.2);
   }
 
   * { box-sizing: border-box; }
 
-  body {
-    margin: 0;
+  .scene {
+    position: relative;
     min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 40px 20px;
-    background:
-      radial-gradient(ellipse 900px 500px at 15% -10%, var(--bg-grain), transparent),
-      var(--bg);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    color: var(--ink);
-  }
-
-  .card {
     width: 100%;
-    max-width: 640px;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 18px;
-    box-shadow: var(--shadow);
-    padding: 36px clamp(20px, 5vw, 44px) 32px;
+    display: flex;
+    justify-content: center;
+    padding: 52px 18px 40px;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text-strong);
   }
 
-  .eyebrow {
-    font-size: 11.5px;
-    font-weight: 600;
-    letter-spacing: 0.11em;
-    text-transform: uppercase;
-    color: var(--accent);
+  /* Sky variants are picked at generation time from the station's real
+     cloud cover and whether it's currently day or night there - the
+     backdrop is a live fact about the sky, not decoration. */
+  .scene[data-sky="day-clear"] {
+    background: linear-gradient(175deg, #1c7fe0 0%, #4aa3ec 42%, #8ed2f7 100%);
+  }
+  .scene[data-sky="day-cloudy"] {
+    background: linear-gradient(175deg, #64748a 0%, #8794a6 45%, #b8c3cd 100%);
+  }
+  .scene[data-sky="night-clear"] {
+    background: linear-gradient(175deg, #050a1e 0%, #101a3c 45%, #263a68 100%);
+  }
+  .scene[data-sky="night-cloudy"] {
+    background: linear-gradient(175deg, #191c24 0%, #2a2e39 45%, #3d434f 100%);
   }
 
-  .header {
+  .scene::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .scene[data-sky="day-clear"]::before {
+    background: radial-gradient(circle at 80% 6%, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0) 34%);
+  }
+
+  .scene[data-sky="night-clear"]::before {
+    background-image:
+      radial-gradient(1.4px 1.4px at 18% 12%, rgba(255, 255, 255, 0.85), transparent),
+      radial-gradient(1px 1px at 68% 8%, rgba(255, 255, 255, 0.6), transparent),
+      radial-gradient(1.4px 1.4px at 84% 22%, rgba(255, 255, 255, 0.75), transparent),
+      radial-gradient(1px 1px at 38% 5%, rgba(255, 255, 255, 0.5), transparent),
+      radial-gradient(1.4px 1.4px at 54% 16%, rgba(255, 255, 255, 0.65), transparent),
+      radial-gradient(1px 1px at 8% 26%, rgba(255, 255, 255, 0.5), transparent),
+      radial-gradient(1.4px 1.4px at 93% 14%, rgba(255, 255, 255, 0.7), transparent),
+      radial-gradient(1px 1px at 28% 20%, rgba(255, 255, 255, 0.45), transparent),
+      radial-gradient(1px 1px at 62% 28%, rgba(255, 255, 255, 0.4), transparent);
+  }
+
+  .content {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 430px;
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    margin-bottom: 28px;
+    gap: 26px;
   }
 
-  h1 {
-    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
-    font-weight: 500;
-    font-size: clamp(22px, 4.5vw, 27px);
-    margin: 2px 0 0;
-    text-wrap: balance;
-    color: var(--ink);
-  }
-
-  .asof {
-    font-size: 13px;
-    color: var(--ink-soft);
-    margin-top: 2px;
-  }
-
-  .hilo-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px 24px;
-    margin-bottom: 22px;
-  }
-
-  .hilo {
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
-    font-size: 13px;
-    color: var(--ink-soft);
-    min-width: 0;
-  }
-
-  .hilo-arrow {
-    font-size: 13px;
-    font-weight: 700;
-  }
-
-  .hilo-up { color: var(--warn); }
-  .hilo-down { color: var(--sky); }
-
-  .hilo-value {
-    font-family: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Consolas, monospace;
-    font-variant-numeric: tabular-nums;
-    font-size: 16px;
+  .place { text-align: center; }
+  .place-eyebrow {
+    font-size: 12px;
     font-weight: 600;
-    color: var(--ink);
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+  }
+  .place-name {
+    font-size: 21px;
+    font-weight: 500;
+    margin-top: 4px;
+    text-wrap: balance;
+  }
+  .place-updated {
+    font-size: 12.5px;
+    color: var(--text-faint);
+    margin-top: 5px;
   }
 
-  .hilo-caption {
-    color: var(--ink-faint);
+  .hero { text-align: center; }
+  .hero-condition {
+    font-size: 17px;
+    font-weight: 400;
+    color: var(--text-soft);
   }
-
-  .readout {
+  .hero-temp {
+    font-size: clamp(84px, 25vw, 116px);
+    font-weight: 200;
+    line-height: 0.95;
+    letter-spacing: -2px;
+    font-variant-numeric: tabular-nums;
+  }
+  .hero-temp sup {
+    font-size: 0.3em;
+    font-weight: 300;
+    top: -0.65em;
+  }
+  .hero-hilo {
+    margin-top: 4px;
     display: flex;
-    align-items: center;
-    gap: clamp(10px, 3vw, 22px);
-    padding: 8px 0 22px;
-    border-bottom: 1px solid var(--line);
-    margin-bottom: 22px;
+    justify-content: center;
+    gap: 16px;
+    font-size: 16px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+  .hilo-high { color: var(--accent-warm); }
+  .hilo-low { color: var(--text-soft); }
+
+  .glass {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 20px;
+    padding: 18px 20px;
+    backdrop-filter: blur(24px) saturate(150%);
+    -webkit-backdrop-filter: blur(24px) saturate(150%);
   }
 
-  .temp-block { flex: 1; min-width: 0; }
-  .temp-block .label {
+  .module-label {
     font-size: 11.5px;
     font-weight: 600;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.09em;
     text-transform: uppercase;
-    color: var(--ink-faint);
-    margin-bottom: 2px;
+    color: var(--text-faint);
+    margin-bottom: 12px;
   }
 
-  .temp-value {
-    font-family: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Consolas, monospace;
-    font-variant-numeric: tabular-nums;
-    font-size: clamp(40px, 11vw, 58px);
+  .estimate-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .estimate-value {
+    font-size: 30px;
     font-weight: 500;
-    line-height: 1;
-    color: var(--ink);
-    white-space: nowrap;
+    color: var(--accent-warm);
+    font-variant-numeric: tabular-nums;
   }
-
-  .temp-value.estimate { color: var(--accent); }
-  .temp-value sup {
-    font-size: 0.42em;
-    top: -0.55em;
-    font-weight: 400;
-  }
-
-  .temp-sub {
-    font-size: 12.5px;
-    color: var(--ink-soft);
-    margin-top: 4px;
-  }
-
-  .arrow {
-    font-size: 20px;
-    color: var(--ink-faint);
-    align-self: center;
-    padding-top: 18px;
+  .estimate-label {
+    font-size: 13px;
+    color: var(--text-soft);
+    text-align: right;
   }
 
   .range-row {
@@ -224,114 +168,91 @@
     align-items: baseline;
     justify-content: space-between;
     gap: 12px;
-    margin-bottom: 8px;
+    margin-top: 14px;
   }
-
   .range-label {
-    font-size: 11.5px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--ink-faint);
+    font-size: 12px;
+    color: var(--text-faint);
   }
-
   .range-values {
-    font-family: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Consolas, monospace;
+    font-size: 13px;
+    color: var(--text-soft);
     font-variant-numeric: tabular-nums;
-    font-size: 14px;
-    color: var(--ink-soft);
   }
 
   .confidence-bar {
     position: relative;
-    height: 8px;
-    border-radius: 5px;
-    background: var(--sky-soft);
-    margin-bottom: 26px;
-    overflow: visible;
+    height: 6px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.18);
+    margin-top: 10px;
+    overflow: hidden;
   }
-
   .confidence-fill {
     position: absolute;
     top: 0; left: 0; height: 100%;
-    border-radius: 5px;
-    background: linear-gradient(90deg, var(--sky), var(--accent));
+    border-radius: 4px;
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.6), var(--accent-warm));
   }
 
-  .confidence-marker {
-    position: absolute;
-    top: -3px;
-    width: 2px;
-    height: 14px;
-    background: var(--ink);
-    border-radius: 1px;
-  }
-
-  .section-label {
-    font-size: 11.5px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--ink-faint);
-    margin-bottom: 10px;
-  }
-
-  .spark-wrap { margin-bottom: 26px; }
-
-  .sparkline { width: 100%; height: auto; display: block; }
-  .spark-area { fill: var(--accent-soft); opacity: 0.6; }
-  .spark-line { fill: none; stroke: var(--sky); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
-  .spark-proj { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linecap: round; stroke-dasharray: 1 7; }
-  .spark-now-dot { fill: var(--surface); stroke: var(--sky); stroke-width: 2; }
-  .spark-est-dot { fill: var(--accent); }
+  .sparkline { width: 100%; height: auto; display: block; margin-top: 4px; }
+  .spark-area { fill: rgba(255, 255, 255, 0.16); }
+  .spark-line { fill: none; stroke: rgba(255, 255, 255, 0.85); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+  .spark-proj { fill: none; stroke: var(--accent-warm); stroke-width: 2.5; stroke-linecap: round; stroke-dasharray: 1 7; }
+  .spark-now-dot { fill: rgba(20, 30, 50, 0.4); stroke: #fff; stroke-width: 2; }
+  .spark-est-dot { fill: var(--accent-warm); }
 
   .spark-caption {
     display: flex;
     justify-content: space-between;
     font-size: 11.5px;
-    color: var(--ink-faint);
+    color: var(--text-faint);
     margin-top: 6px;
   }
 
-  .stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  .hilo-detail-row {
+    display: flex;
+    flex-direction: column;
     gap: 10px;
   }
-
-  .stat {
-    background: var(--bg);
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    padding: 12px 14px;
+  .hilo-detail {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 14px;
   }
+  .hilo-detail-arrow { font-weight: 700; width: 14px; }
+  .hilo-detail .hilo-high { font-weight: 600; }
+  .hilo-detail .hilo-low { font-weight: 600; color: var(--text-strong); }
+  .hilo-detail-caption { color: var(--text-faint); }
 
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 12px;
+  }
+  .stat { min-width: 0; }
   .stat .label {
     font-size: 10.5px;
     font-weight: 600;
-    letter-spacing: 0.07em;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: var(--ink-faint);
-    margin-bottom: 5px;
+    color: var(--text-faint);
+    margin-bottom: 4px;
   }
-
   .stat .value {
-    font-family: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Consolas, monospace;
-    font-variant-numeric: tabular-nums;
     font-size: 17px;
-    color: var(--ink);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
   }
 
   .chip {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    font-size: 14px;
+    font-size: 17px;
     font-weight: 500;
-    padding: 1px 0;
   }
-
   .chip::before {
     content: "";
     width: 6px;
@@ -339,130 +260,136 @@
     border-radius: 50%;
     background: currentColor;
   }
-
-  .chip-neutral { color: var(--ink-soft); }
-  .chip-warn { color: var(--warn); }
-  .chip-good { color: var(--good); }
+  .chip-neutral { color: var(--text-soft); }
+  .chip-warn { color: var(--accent-warm); }
+  .chip-good { color: var(--text-strong); }
 
   .data-links {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px 18px;
-    margin-bottom: 4px;
+    gap: 6px 16px;
   }
-
   .data-links a {
     font-size: 13px;
-    color: var(--accent);
+    color: var(--text-soft);
     text-decoration: none;
     border-bottom: 1px solid transparent;
   }
-
-  .data-links a:hover { border-bottom-color: var(--accent); }
+  .data-links a:hover { border-bottom-color: var(--text-soft); }
   .data-links a:focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--text-strong);
     outline-offset: 3px;
     border-radius: 2px;
   }
 
   .footer {
-    margin-top: 26px;
-    padding-top: 16px;
-    border-top: 1px solid var(--line);
     font-size: 12px;
-    color: var(--ink-faint);
+    color: var(--text-faint);
     line-height: 1.5;
+    text-align: center;
+    padding: 0 8px;
   }
 
   @media (prefers-reduced-motion: no-preference) {
-    .card { animation: rise 0.4s ease-out; }
+    .content { animation: rise 0.45s ease-out; }
     @keyframes rise {
-      from { opacity: 0; transform: translateY(6px); }
+      from { opacity: 0; transform: translateY(8px); }
       to { opacity: 1; transform: translateY(0); }
     }
   }
 </style>
 
-<div class="card">
-  <div class="header">
-    <span class="eyebrow">Sea-Tac Airport · {{station_id}}</span>
-    <h1>{{station_name}}</h1>
-    <span class="asof">As of {{as_of_time}} · {{as_of_date}}</span>
-  </div>
+<div class="scene" data-sky="{{sky_class}}">
+  <div class="content">
+    <div class="place">
+      <div class="place-eyebrow">Sea-Tac Airport · {{station_id}}</div>
+      <div class="place-name">{{station_name}}</div>
+      <div class="place-updated">As of {{as_of_time}} · {{as_of_date}}</div>
+    </div>
 
-  <div class="hilo-row">
-    <div class="hilo">
-      <span class="hilo-arrow hilo-up">↑</span>
-      <span class="hilo-value">{{daily_high}}°</span>
-      <span class="hilo-caption">{{daily_high_caption}} · ~{{daily_high_time}}</span>
+    <div class="hero">
+      <div class="hero-condition">{{condition_text}}</div>
+      <div class="hero-temp">{{current_temp}}<sup>°F</sup></div>
+      <div class="hero-hilo">
+        <span class="hilo-high">↑{{daily_high}}°</span>
+        <span class="hilo-low">↓{{daily_low}}°</span>
+      </div>
     </div>
-    <div class="hilo">
-      <span class="hilo-arrow hilo-down">↓</span>
-      <span class="hilo-value">{{daily_low}}°</span>
-      <span class="hilo-caption">{{daily_low_caption}} · ~{{daily_low_time}}</span>
-    </div>
-  </div>
 
-  <div class="readout">
-    <div class="temp-block">
-      <div class="label">Now</div>
-      <div class="temp-value">{{current_temp}}<sup>°F</sup></div>
-      <div class="temp-sub">{{current_temp_precise}}° exact</div>
+    <div class="glass">
+      <div class="module-label">Trend</div>
+      <div class="estimate-row">
+        <span class="estimate-value">{{estimated_temp}}°</span>
+        <span class="estimate-label">by {{target_time}}<br>{{trend_per_hr}}°/hr, damped</span>
+      </div>
+      <div class="range-row">
+        <span class="range-label">Likely range</span>
+        <span class="range-values">{{range_low}}°–{{range_high}}° (±{{band_width}}°)</span>
+      </div>
+      <div class="confidence-bar">
+        <div class="confidence-fill" style="width: {{confidence_pct}}%;"></div>
+      </div>
     </div>
-    <div class="arrow">→</div>
-    <div class="temp-block">
-      <div class="label">Est. {{target_time}}</div>
-      <div class="temp-value estimate">{{estimated_temp}}<sup>°F</sup></div>
-      <div class="temp-sub">{{trend_per_hr}}°/hr trend, damped</div>
-    </div>
-  </div>
 
-  <div class="range-row">
-    <span class="range-label">Likely range in {{hours_ahead}}h</span>
-    <span class="range-values">{{range_low}}°–{{range_high}}° (±{{band_width}}°)</span>
-  </div>
-  <div class="confidence-bar">
-    <div class="confidence-fill" style="width: {{confidence_pct}}%;"></div>
-  </div>
+    <div class="glass">
+      <div class="module-label">Last {{sparkline_hours}}h + projection</div>
+      {{sparkline_svg}}
+      <div class="spark-caption">
+        <span>{{sparkline_hours}}h ago</span>
+        <span>{{target_time}}</span>
+      </div>
+    </div>
 
-  <div class="spark-wrap">
-    <div class="section-label">Last {{sparkline_hours}}h + projection</div>
-    {{sparkline_svg}}
-    <div class="spark-caption">
-      <span>{{sparkline_hours}}h ago</span>
-      <span>{{target_time}}</span>
+    <div class="glass">
+      <div class="module-label">Today's extremes, by the sun</div>
+      <div class="hilo-detail-row">
+        <div class="hilo-detail">
+          <span class="hilo-detail-arrow hilo-high">↑</span>
+          <span class="hilo-high">{{daily_high}}°</span>
+          <span class="hilo-detail-caption">{{daily_high_caption}} · ~{{daily_high_time}}</span>
+        </div>
+        <div class="hilo-detail">
+          <span class="hilo-detail-arrow hilo-low">↓</span>
+          <span class="hilo-low">{{daily_low}}°</span>
+          <span class="hilo-detail-caption">{{daily_low_caption}} · ~{{daily_low_time}}</span>
+        </div>
+      </div>
     </div>
-  </div>
 
-  <div class="section-label">Conditions</div>
-  <div class="stats">
-    <div class="stat">
-      <div class="label">Wind</div>
-      <div class="value">{{wind_mph}} mph</div>
+    <div class="glass">
+      <div class="module-label">Conditions</div>
+      <div class="stats">
+        <div class="stat">
+          <div class="label">Wind</div>
+          <div class="value">{{wind_mph}} mph</div>
+        </div>
+        <div class="stat">
+          <div class="label">Cloud cover</div>
+          <div class="value">{{cloud_label}}</div>
+        </div>
+        <div class="stat">
+          <div class="label">Pressure</div>
+          <div class="value"><span class="chip {{pressure_class}}">{{pressure_label}}</span></div>
+        </div>
+        <div class="stat">
+          <div class="label">Confidence</div>
+          <div class="value">{{confidence_pct}}%</div>
+        </div>
+      </div>
     </div>
-    <div class="stat">
-      <div class="label">Cloud cover</div>
-      <div class="value">{{cloud_label}}</div>
-    </div>
-    <div class="stat">
-      <div class="label">Pressure</div>
-      <div class="value"><span class="chip {{pressure_class}}">{{pressure_label}}</span></div>
-    </div>
-    <div class="stat">
-      <div class="label">Confidence</div>
-      <div class="value">{{confidence_pct}}%</div>
-    </div>
-  </div>
 
-  <div class="section-label">Verify the data</div>
-  <div class="data-links">
-    <a href="{{obs_json_url}}" target="_blank" rel="noopener">Raw station data (JSON)</a>
-    <a href="{{obhistory_url}}" target="_blank" rel="noopener">NWS observation history</a>
-    <a href="{{forecast_url}}" target="_blank" rel="noopener">Official NWS forecast</a>
-    <a href="{{timeseries_url}}" target="_blank" rel="noopener">NWS time series chart</a>
-  </div>
+    <div>
+      <div class="module-label">Verify the data</div>
+      <div class="data-links">
+        <a href="{{obs_json_url}}" target="_blank" rel="noopener">Raw station data (JSON)</a>
+        <a href="{{obhistory_url}}" target="_blank" rel="noopener">NWS observation history</a>
+        <a href="{{forecast_url}}" target="_blank" rel="noopener">Official NWS forecast</a>
+        <a href="{{timeseries_url}}" target="_blank" rel="noopener">NWS time series chart</a>
+      </div>
+    </div>
 
-  <div class="footer">
-    Model estimate from {{n_observations}} recent station observations — not an official NWS forecast. Refreshes on a schedule; numbers reflect the last refresh, not this exact moment.
+    <div class="footer">
+      Model estimate from {{n_observations}} recent station observations — not an official NWS forecast. Refreshes on a schedule; numbers reflect the last refresh, not this exact moment.
+    </div>
   </div>
 </div>

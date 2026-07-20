@@ -13,6 +13,7 @@ from weather_estimator import (
     estimate_daily_extremes,
     get_station_location,
     get_observation_history,
+    get_sun_times,
 )
 
 STATION = "KSEA"
@@ -89,6 +90,20 @@ LOW_CAPTIONS = {
 }
 
 
+def sky_condition(cloud_fraction, is_day):
+    """(condition label, sky class) from cloud cover and day/night, for the
+    background gradient and condition text - both drawn from the same
+    observation the rest of the page already uses."""
+    c = cloud_fraction if cloud_fraction is not None else 0.0
+    if c <= 0.15:
+        return ("Sunny" if is_day else "Clear", "day-clear" if is_day else "night-clear")
+    if c <= 0.5:
+        return ("Mostly Sunny" if is_day else "Mostly Clear", "day-clear" if is_day else "night-clear")
+    if c <= 0.85:
+        return ("Partly Cloudy", "day-cloudy" if is_day else "night-cloudy")
+    return ("Cloudy", "day-cloudy" if is_day else "night-cloudy")
+
+
 def main():
     est = estimate_temp(STATION, hours_ahead=HOURS_AHEAD)
     extremes = estimate_daily_extremes(STATION)
@@ -112,6 +127,11 @@ def main():
     cloud_label = f"{round(cloud_pct * 100)}%" if cloud_pct is not None else "—"
 
     confidence_pct = round(est["diurnal_damping"] * est["sky_wind_damping"] * 100)
+
+    sunrise_h, sunset_h = get_sun_times(lat, lon, now.date())
+    now_h = now.hour + now.minute / 60
+    is_day = sunrise_h <= now_h < sunset_h
+    condition_text, sky_class = sky_condition(cloud_pct, is_day)
 
     obs_json_url = f"https://api.weather.gov/stations/{STATION}/observations"
     obhistory_url = f"https://forecast.weather.gov/data/obhistory/{STATION}.html"
@@ -148,6 +168,8 @@ def main():
         "daily_low": f"{extremes['estimated_low_f']:.0f}",
         "daily_low_caption": LOW_CAPTIONS[extremes["low_status"]],
         "daily_low_time": _fmt_day_time(extremes["estimated_low_time"]),
+        "sky_class": sky_class,
+        "condition_text": condition_text,
         "obs_json_url": obs_json_url,
         "obhistory_url": obhistory_url,
         "forecast_url": forecast_url,
