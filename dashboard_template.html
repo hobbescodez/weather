@@ -190,6 +190,13 @@
     font-variant-numeric: tabular-nums;
   }
 
+  .hint {
+    font-size: 11.5px;
+    color: var(--text-faint);
+    line-height: 1.4;
+    margin-top: 6px;
+  }
+
   .confidence-bar {
     position: relative;
     height: 6px;
@@ -329,15 +336,27 @@
       <div class="module-label">Trend</div>
       <div class="estimate-row">
         <span class="estimate-value"><span class="dot-warm"></span>{{estimated_temp}}°</span>
-        <span class="estimate-label">by {{target_time}}<br>{{trend_per_hr}}°/hr, damped</span>
+        <span class="estimate-label">by {{target_time}}</span>
       </div>
+
       <div class="range-row">
-        <span class="range-label">Likely range</span>
-        <span class="range-values">{{range_low}}°–{{range_high}}° (±{{band_width}}°)</span>
+        <span class="range-label">Raw local trend</span>
+        <span class="range-values">{{trend_per_hr}}°/hr</span>
+      </div>
+      <div class="range-row" style="margin-top: 6px;">
+        <span class="range-label">Applied, after damping</span>
+        <span class="range-values">{{confidence_pct}}%</span>
       </div>
       <div class="confidence-bar">
         <div class="confidence-fill" style="width: {{confidence_pct}}%;"></div>
       </div>
+      <div class="hint">How much of the raw trend the model trusts, based on proximity to sunrise/peak-heat hour and current cloud/wind. Low near those turning points, since the trend is about to reverse.</div>
+
+      <div class="range-row" style="margin-top: 16px;">
+        <span class="range-label">Uncertainty band</span>
+        <span class="range-values">{{range_low}}°–{{range_high}}° (±{{band_width}}°)</span>
+      </div>
+      <div class="hint">Widens mainly when pressure is falling (unsettled weather approaching) - separate from the trend confidence above.</div>
     </div>
 
     <div class="glass">
