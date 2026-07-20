@@ -377,6 +377,25 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         sunrise_tomorrow, _ = get_sun_times(lat, lon, tomorrow)
         low_time = _hour_to_datetime(tomorrow, sunrise_tomorrow, now.tzinfo)
 
+    # Tomorrow's high: there's no real forecast model behind this - just a
+    # persistence guess (assume tomorrow's peak looks like today's) nudged by
+    # the current pressure trend, which is the only signal this station-only
+    # tool has about a system change coming. Confidence is capped low and
+    # explicitly separate from today's sun-grounded numbers above, since a
+    # short local trend genuinely can't see a day ahead.
+    t0 = df["time"].iloc[0]
+    elapsed_hours_all = (df["time"] - t0).dt.total_seconds() / 3600
+    pressure_trend, _ = _pressure_trend_and_uncertainty(df, elapsed_hours_all, 24)
+    if pressure_trend is None:
+        pressure_adj, tomorrow_confidence = 0.0, 45
+    elif pressure_trend < -0.015:
+        pressure_adj, tomorrow_confidence = -2.0, 35  # falling pressure: system/front likely changing things
+    elif pressure_trend > 0.015:
+        pressure_adj, tomorrow_confidence = 1.0, 55  # rising pressure: current pattern more likely to hold
+    else:
+        pressure_adj, tomorrow_confidence = 0.0, 50
+    tomorrow_high = estimated_high + pressure_adj
+
     return {
         "as_of": now,
         "station": station_id.upper(),
@@ -391,6 +410,8 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         "observed_high_so_far_time": observed_high_time,  # when that actual high was recorded
         "observed_low_so_far_f": round(observed_low, 2),
         "observed_low_so_far_time": observed_low_time,  # when that actual low was recorded
+        "tomorrow_high_f": round(tomorrow_high, 1),
+        "tomorrow_high_confidence_pct": tomorrow_confidence,
     }
 
 

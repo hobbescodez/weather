@@ -171,6 +171,8 @@ def main():
         "observed_high_time": _fmt_time(extremes["observed_high_so_far_time"]),
         "observed_low": f"{extremes['observed_low_so_far_f']:.2f}",
         "observed_low_time": _fmt_time(extremes["observed_low_so_far_time"]),
+        "tomorrow_high": f"{extremes['tomorrow_high_f']:.0f}",
+        "tomorrow_confidence_pct": extremes["tomorrow_high_confidence_pct"],
         "sky_class": sky_class,
         "condition_text": condition_text,
         "obs_json_url": obs_json_url,

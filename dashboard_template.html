@@ -4,8 +4,8 @@
     --text-strong: #ffffff;
     --text-soft: rgba(255, 255, 255, 0.82);
     --text-faint: rgba(255, 255, 255, 0.56);
-    --accent-warm: #f5a623;
-    --accent-warm-soft: rgba(245, 166, 35, 0.85);
+    --accent-warm: #ffd60a;
+    --accent-warm-soft: rgba(255, 214, 10, 0.85);
     --glass-bg: rgba(255, 255, 255, 0.15);
     --glass-bg-strong: rgba(255, 255, 255, 0.22);
     --glass-border: rgba(255, 255, 255, 0.26);
@@ -395,6 +395,18 @@
           <span class="hilo-detail-caption">recorded at {{observed_low_time}}</span>
         </div>
       </div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Tomorrow's high</div>
+      <div class="estimate-row">
+        <span class="estimate-value"><span class="dot-warm"></span>{{tomorrow_high}}°</span>
+        <span class="estimate-label">confidence {{tomorrow_confidence_pct}}%</span>
+      </div>
+      <div class="confidence-bar" style="margin-top: 10px;">
+        <div class="confidence-fill" style="width: {{tomorrow_confidence_pct}}%;"></div>
+      </div>
+      <div class="hint">A persistence guess (today's pattern carried forward, nudged by the pressure trend) - not a real forecast model. Confidence is capped low on purpose; a single station's short trend can't see a full day ahead.</div>
     </div>
 
     <div class="glass">
