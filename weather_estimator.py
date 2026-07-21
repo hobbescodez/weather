@@ -340,6 +340,17 @@ def estimate_daily_extremes(station_id, obs_limit=8):
     observed_high_time = today_obs.loc[today_obs["temp_f"].idxmax(), "time"]
     observed_low_time = today_obs.loc[today_obs["temp_f"].idxmin(), "time"]
 
+    yesterday = today - timedelta(days=1)
+    yesterday_start = datetime.combine(yesterday, time(0, 0), tzinfo=now.tzinfo)
+    try:
+        yesterday_obs = get_observation_history(station_id, start=yesterday_start, end=midnight)
+        yesterday_high = yesterday_obs["temp_f"].max()
+        yesterday_low = yesterday_obs["temp_f"].min()
+        yesterday_high_time = yesterday_obs.loc[yesterday_obs["temp_f"].idxmax(), "time"]
+        yesterday_low_time = yesterday_obs.loc[yesterday_obs["temp_f"].idxmin(), "time"]
+    except ValueError:
+        yesterday_high = yesterday_low = yesterday_high_time = yesterday_low_time = None
+
     sunrise_today, sunset_today = get_sun_times(lat, lon, today)
     peak_today = sunrise_today + (sunset_today - sunrise_today) * 0.65
     hour = now.hour + now.minute / 60
@@ -412,6 +423,10 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         "observed_low_so_far_time": observed_low_time,  # when that actual low was recorded
         "tomorrow_high_f": round(tomorrow_high, 1),
         "tomorrow_high_confidence_pct": tomorrow_confidence,
+        "yesterday_high_f": round(yesterday_high, 2) if yesterday_high is not None else None,
+        "yesterday_high_time": yesterday_high_time,
+        "yesterday_low_f": round(yesterday_low, 2) if yesterday_low is not None else None,
+        "yesterday_low_time": yesterday_low_time,
     }
 
 
