@@ -9,6 +9,7 @@ checks past estimates against what the station actually recorded.
 pip install requests pandas numpy astral
 """
 
+import math
 import warnings
 
 import requests
@@ -532,6 +533,26 @@ def estimate_temp(
         df, hours_ahead, lat, lon,
         use_nws_forecast=use_nws_forecast, nws_blend_mode=nws_blend_mode, use_gradient=use_gradient,
     )
+
+    # Reconcile the headline number against the same peak/trough curve shown
+    # elsewhere on the dashboard (see estimate_day_curve), so this can't show
+    # a "trend by X" that overshoots the stated peak or undershoots the
+    # stated trough - the raw_trend/damping/confidence figures above still
+    # explain *why*, they just no longer double as the displayed number.
+    curve = estimate_day_curve(station_id, obs_limit=obs_limit)
+    reconciled_temp = curve["at"](result["target_time"])
+    half_band = (result["estimated_range_f"][1] - result["estimated_range_f"][0]) / 2
+
+    # result["trend_estimate_f"] is already the pure pre-NWS-blend trend value
+    # from estimate_from_df; add the blended-but-not-yet-reconciled value too
+    # so all three stages (trend only -> +NWS blend -> +peak/trough
+    # reconciliation) stay inspectable.
+    result["pre_reconciliation_temp_f"] = result["estimated_temp_f"]
+    result["estimated_temp_f"] = round(reconciled_temp, 1)
+    result["estimated_range_f"] = (
+        round(reconciled_temp - half_band, 1),
+        round(reconciled_temp + half_band, 1),
+    )
     result["station"] = station_id.upper()
     result["station_name"] = name
     return result
@@ -675,6 +696,71 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         "yesterday_high_time": yesterday_high_time,
         "yesterday_low_f": round(yesterday_low, 2) if yesterday_low is not None else None,
         "yesterday_low_time": yesterday_low_time,
+    }
+
+
+def estimate_day_curve(station_id, obs_limit=8):
+    """
+    A single curve for "what will the temperature be at any future time
+    today/tonight," so that estimate_temp's "trend by X" projection and
+    estimate_daily_extremes' peak/trough figures can't contradict each other
+    the way they used to: previously a "trend by X" 3-hour projection just
+    kept extrapolating the current damped slope past the point where the
+    separately-computed peak-hour estimate said the curve should already be
+    turning over (e.g. showing 93F at 5:20pm when the peak was estimated at
+    90F at 3:33pm).
+
+    Why this isn't just "sweep estimate_from_df across many hours_ahead and
+    take the max": that formula's damping only ever shrinks the *magnitude*
+    of the current trend, never flips its *sign* - swept out far enough it
+    just plateaus (verified: swept to 103.9F by 6h out and stayed there
+    through 2am), it never comes back down on its own. So instead this reuses
+    the peak/trough *values* that estimate_daily_extremes already computes
+    (which do properly turn over, since they're anchored to sunrise/peak-hour
+    and the dewpoint-cooling heuristic rather than a straight-line trend) as
+    fixed points, and interpolates between them with a half-cosine ease -
+    the same slow-near-the-extremes, faster-in-between shape a real diurnal
+    cycle has. That interpolation can never exceed the higher of two
+    consecutive anchors or undershoot the lower one, so the "can't overshoot
+    the peak/undershoot the trough" property this bug needs falls out of the
+    curve's shape rather than needing a separate clamp bolted on.
+
+    Returns a dict with the anchor points used and an `at(target_time)`
+    function to evaluate the curve at any future time within its span
+    (holds flat at the last anchor's value beyond it, rather than
+    extrapolating blindly).
+    """
+    extremes = estimate_daily_extremes(station_id, obs_limit=obs_limit)
+    now = extremes["as_of"]
+    lat, lon, name = get_station_location(station_id)
+    df = get_observation_history(station_id, limit=obs_limit)
+    current_temp = df["temp_f"].iloc[-1]
+
+    anchors = [(now, current_temp)]
+    future_anchors = []
+    if extremes["high_status"] == "projected":  # peak hasn't happened yet - it's a real future anchor
+        future_anchors.append((extremes["estimated_high_time"], extremes["estimated_high_f"]))
+    future_anchors.append((extremes["estimated_low_time"], extremes["estimated_low_f"]))  # always still ahead
+    future_anchors.sort(key=lambda pair: pair[0])
+    anchors.extend(future_anchors)
+
+    def at(target_time):
+        if target_time <= anchors[0][0]:
+            return anchors[0][1]
+        for (t_a, v_a), (t_b, v_b) in zip(anchors, anchors[1:]):
+            if t_a <= target_time <= t_b:
+                span_seconds = (t_b - t_a).total_seconds()
+                frac = 0.5 if span_seconds == 0 else (target_time - t_a).total_seconds() / span_seconds
+                eased = (1 - math.cos(frac * math.pi)) / 2  # slow at the ends, fast in the middle
+                return v_a + (v_b - v_a) * eased
+        return anchors[-1][1]  # beyond the last anchor: hold flat rather than guess
+
+    return {
+        "as_of": now,
+        "station": station_id.upper(),
+        "station_name": name,
+        "anchors": anchors,
+        "at": at,
     }
 
 
