@@ -194,6 +194,19 @@ def diurnal_damping_factor(current_time, hours_ahead, lat, lon):
     return damping
 
 
+def _expected_trend_sign(current_time, lat, lon):
+    """
+    +1 during the sunrise-to-peak stretch of the day (temperature should be
+    climbing), -1 the rest of the time - peak through the next sunrise
+    (temperature should be falling toward the overnight low, then flat/rising
+    again right at dawn, which the sunrise boundary already accounts for).
+    """
+    sunrise_h, sunset_h = get_sun_times(lat, lon, current_time.date())
+    peak_h = sunrise_h + (sunset_h - sunrise_h) * 0.65
+    hour = current_time.hour + current_time.minute / 60
+    return 1 if sunrise_h <= hour < peak_h else -1
+
+
 # ---------------------------------------------------------------------------
 # Estimation
 # ---------------------------------------------------------------------------
@@ -274,6 +287,17 @@ def estimate_from_df(df, hours_ahead, lat, lon):
     diurnal_damping = diurnal_damping_factor(now, hours_ahead, lat, lon)
     sky_wind_damping = _cloud_wind_damping(df)
     combined_damping = diurnal_damping * sky_wind_damping
+
+    # diurnal_damping_factor only weighs proximity to an inflection point, so
+    # it fades back toward 1.0 (trusting the raw trend) the further past
+    # peak/sunrise you get - even if that raw trend (fit on the last several
+    # minutes) is still pointed the "wrong" way for the time of day, e.g.
+    # still reading warming at 6pm, well after peak-heat hour. That's a much
+    # weaker signal than a trend already pointed the expected direction, so
+    # discount it further here rather than let the proximity fade-out alone
+    # decide how much to trust it.
+    if slope != 0 and np.sign(slope) != _expected_trend_sign(now, lat, lon):
+        combined_damping *= 0.4
 
     pressure_trend, uncertainty_f = _pressure_trend_and_uncertainty(df, elapsed_hours, hours_ahead)
 
