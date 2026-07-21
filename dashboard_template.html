@@ -504,6 +504,7 @@
       <div class="module-label">Kalshi · today's high market</div>
       {{kalshi_high_rows}}
       <div class="hint">Highlighted bracket is the one this tool's own estimate falls into - not a probability call, just a quick eyeball check against the market's pricing.</div>
+      <div class="hint">Bid/ask are the current highest buy offer and lowest sell offer for that bracket (last-price is the most recent trade, which can lag). A wide gap between them usually means a thin, less reliable market.</div>
       <div class="kalshi-ticker">{{kalshi_high_ticker}}</div>
     </div>
 
@@ -565,6 +566,7 @@
 
     <div class="footer">
       Model estimate from {{n_observations}} recent station observations — not an official NWS forecast. Refreshes on a schedule; numbers reflect the last refresh, not this exact moment.
+      <br>Estimates shown against Kalshi's pricing are this tool's own in-house model (trend + diurnal shape + NWS blend), not independently validated — backtesting so far shows a typical error of a few degrees. Treat the bracket match as a rough gut-check, not a trading signal.
     </div>
   </div>
 </div>

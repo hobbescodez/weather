@@ -98,6 +98,11 @@ def build_cloud_icon_svg(cloud_pct):
 
 
 def _bracket_contains(bracket, value):
+    # Kalshi settles on the officially reported whole-degree temperature,
+    # while our own estimate is a continuous decimal (e.g. 91.40) - rounding
+    # first avoids it falling in the crack between adjacent integer
+    # brackets like "90 to 91" and "92 to 93", where neither would match.
+    value = round(value)
     floor = bracket["floor_strike"]
     cap = bracket["cap_strike"]
     if floor is not None and cap is not None:
