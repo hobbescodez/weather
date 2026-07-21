@@ -84,6 +84,10 @@ HIGH_CAPTIONS = {
     "observed": "today's high so far",
     "projected": "projected for today's peak-heat hour",
 }
+TOMORROW_HINTS = {
+    "nws_forecast": "From the NWS hourly forecast (HRRR model) - real atmospheric dynamics, not this tool's own trend/persistence guess.",
+    "persistence_fallback": "NWS forecast unavailable - falling back to a persistence guess (today's/yesterday's high, nudged by pressure trend). Confidence is capped low on purpose; a single station's short trend can't see a full day ahead.",
+}
 LOW_CAPTIONS = {
     "today": "today's overnight low, almost here",
     "tonight": "expected low tonight",
@@ -172,6 +176,12 @@ def main():
         "observed_low_time": _fmt_time(extremes["observed_low_so_far_time"]),
         "tomorrow_high": f"{extremes['tomorrow_high_f']:.2f}",
         "tomorrow_confidence_pct": extremes["tomorrow_high_confidence_pct"],
+        "tomorrow_meta": (
+            f"~{_fmt_time(extremes['tomorrow_high_time'])} · confidence {extremes['tomorrow_high_confidence_pct']}%"
+            if extremes["tomorrow_high_time"] is not None
+            else f"confidence {extremes['tomorrow_high_confidence_pct']}%"
+        ),
+        "tomorrow_hint": TOMORROW_HINTS[extremes["tomorrow_high_source"]],
         "yesterday_high": f"{extremes['yesterday_high_f']:.2f}" if extremes["yesterday_high_f"] is not None else "—",
         "yesterday_high_time": _fmt_time(extremes["yesterday_high_time"]) if extremes["yesterday_high_time"] is not None else "—",
         "yesterday_low": f"{extremes['yesterday_low_f']:.2f}" if extremes["yesterday_low_f"] is not None else "—",

@@ -414,12 +414,12 @@
       <div class="module-label">Tomorrow's high</div>
       <div class="estimate-row">
         <span class="estimate-value"><span class="dot-warm"></span>{{tomorrow_high}}°</span>
-        <span class="estimate-label">confidence {{tomorrow_confidence_pct}}%</span>
+        <span class="estimate-label">{{tomorrow_meta}}</span>
       </div>
       <div class="confidence-bar" style="margin-top: 10px;">
         <div class="confidence-fill" style="width: {{tomorrow_confidence_pct}}%;"></div>
       </div>
-      <div class="hint">A persistence guess (today's pattern carried forward, nudged by the pressure trend) - not a real forecast model. Confidence is capped low on purpose; a single station's short trend can't see a full day ahead.</div>
+      <div class="hint">{{tomorrow_hint}}</div>
     </div>
 
     <div class="glass">
