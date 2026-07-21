@@ -298,6 +298,31 @@
     border-radius: 2px;
   }
 
+  .kalshi-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 10px;
+    border-radius: 10px;
+    font-size: 13.5px;
+  }
+  .kalshi-row + .kalshi-row { margin-top: 2px; }
+  .kalshi-row-match {
+    background: var(--glass-bg-strong);
+    border: 1px solid var(--glass-border);
+  }
+  .kalshi-label { color: var(--text-soft); font-variant-numeric: tabular-nums; }
+  .kalshi-pct {
+    font-weight: 600;
+    color: var(--text-strong);
+    font-variant-numeric: tabular-nums;
+  }
+  .kalshi-ticker {
+    font-size: 11px;
+    color: var(--text-faint);
+    margin-top: 10px;
+  }
+
   .footer {
     font-size: 12px;
     color: var(--text-faint);
@@ -420,6 +445,20 @@
         <div class="confidence-fill" style="width: {{tomorrow_confidence_pct}}%;"></div>
       </div>
       <div class="hint">{{tomorrow_hint}}</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Kalshi · today's high market</div>
+      {{kalshi_high_rows}}
+      <div class="hint">Highlighted bracket is the one this tool's own estimate falls into - not a probability call, just a quick eyeball check against the market's pricing.</div>
+      <div class="kalshi-ticker">{{kalshi_high_ticker}}</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Kalshi · today's low market</div>
+      {{kalshi_low_rows}}
+      <div class="hint">Trades stay manual for now - this is a side-by-side view for a human to review, not an automated signal.</div>
+      <div class="kalshi-ticker">{{kalshi_low_ticker}}</div>
     </div>
 
     <div class="glass">

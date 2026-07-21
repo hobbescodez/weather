@@ -6,7 +6,7 @@ Run standalone to regenerate dashboard.html in this directory:
 """
 
 import json
-from datetime import timedelta
+from datetime import date, timedelta
 
 from weather_estimator import (
     estimate_temp,
@@ -15,6 +15,7 @@ from weather_estimator import (
     get_observation_history,
     get_sun_times,
 )
+from kalshi import HIGH_SERIES, LOW_SERIES, get_market_for_date
 
 STATION = "KSEA"
 HOURS_AHEAD = 3
@@ -80,6 +81,43 @@ def pressure_chip(trend):
     return ("steady", "chip-neutral")
 
 
+def _bracket_contains(bracket, value):
+    floor = bracket["floor_strike"]
+    cap = bracket["cap_strike"]
+    if floor is not None and cap is not None:
+        return floor <= value <= cap
+    if floor is not None:  # "X or above" - no cap
+        return value >= floor
+    if cap is not None:  # "X or below" - no floor
+        return value <= cap
+    return False
+
+
+def build_kalshi_rows(brackets, our_estimate):
+    """
+    HTML rows for one Kalshi bracket market, highlighting whichever bracket
+    our own point estimate currently falls into - a quick visual check of
+    whether the model and the market agree, without computing a full
+    probability distribution (that's a deliberate next step, not this one).
+    """
+    if not brackets:
+        return '<div class="hint">Market unavailable.</div>'
+
+    rows = []
+    for b in brackets:
+        pct = round(b["last_price"] * 100) if b["last_price"] is not None else None
+        pct_label = f"{pct}%" if pct is not None else "—"
+        is_match = _bracket_contains(b, our_estimate)
+        match_class = " kalshi-row-match" if is_match else ""
+        rows.append(
+            f'<div class="kalshi-row{match_class}">'
+            f'<span class="kalshi-label">{b["label"]}</span>'
+            f'<span class="kalshi-pct">{pct_label}</span>'
+            f"</div>"
+        )
+    return "\n".join(rows)
+
+
 HIGH_CAPTIONS = {
     "observed": "today's high so far",
     "projected": "projected for today's peak-heat hour",
@@ -112,6 +150,18 @@ def main():
     est = estimate_temp(STATION, hours_ahead=HOURS_AHEAD)
     extremes = estimate_daily_extremes(STATION)
     lat, lon, _ = get_station_location(STATION)
+
+    today = date.today()
+    try:
+        kalshi_high = get_market_for_date(HIGH_SERIES, today)
+    except Exception as e:
+        print(f"Kalshi high market fetch failed: {e}")
+        kalshi_high = None
+    try:
+        kalshi_low = get_market_for_date(LOW_SERIES, today)
+    except Exception as e:
+        print(f"Kalshi low market fetch failed: {e}")
+        kalshi_low = None
 
     now = est["as_of"]
     window_start = now - timedelta(hours=SPARKLINE_HOURS)
@@ -186,6 +236,18 @@ def main():
         "yesterday_high_time": _fmt_time(extremes["yesterday_high_time"]) if extremes["yesterday_high_time"] is not None else "—",
         "yesterday_low": f"{extremes['yesterday_low_f']:.2f}" if extremes["yesterday_low_f"] is not None else "—",
         "yesterday_low_time": _fmt_time(extremes["yesterday_low_time"]) if extremes["yesterday_low_time"] is not None else "—",
+        "kalshi_high_ticker": kalshi_high["event_ticker"] if kalshi_high else "no open market",
+        "kalshi_high_rows": build_kalshi_rows(kalshi_high["brackets"], extremes["estimated_high_f"]) if kalshi_high else '<div class="hint">Market unavailable.</div>',
+        "kalshi_low_ticker": kalshi_low["event_ticker"] if kalshi_low else "no open market",
+        # Today's Kalshi low market settles on TODAY's calendar-day low. Once
+        # that's already happened (low_status == "tonight"), estimated_low_f
+        # has moved on to forecasting the *next* night's low instead (a
+        # different, tomorrow-dated quantity) - so the observed value is the
+        # correct one to compare against today's market, not the forecast.
+        "kalshi_low_rows": build_kalshi_rows(
+            kalshi_low["brackets"],
+            extremes["observed_low_so_far_f"] if extremes["low_status"] == "tonight" else extremes["estimated_low_f"],
+        ) if kalshi_low else '<div class="hint">Market unavailable.</div>',
         "sky_class": sky_class,
         "condition_text": condition_text,
         "obs_json_url": obs_json_url,
