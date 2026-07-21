@@ -445,6 +445,16 @@
         <div class="confidence-fill" style="width: {{tomorrow_confidence_pct}}%;"></div>
       </div>
       <div class="hint">{{tomorrow_hint}}</div>
+
+      <div class="module-label" style="margin-top: 16px;">Tomorrow's low</div>
+      <div class="estimate-row">
+        <span class="estimate-value">{{tomorrow_low}}°</span>
+        <span class="estimate-label">{{tomorrow_low_meta}}</span>
+      </div>
+      <div class="confidence-bar" style="margin-top: 10px;">
+        <div class="confidence-fill" style="width: {{tomorrow_low_confidence_pct}}%;"></div>
+      </div>
+      <div class="hint">{{tomorrow_low_hint}}</div>
     </div>
 
     <div class="glass">
@@ -459,6 +469,20 @@
       {{kalshi_low_rows}}
       <div class="hint">Trades stay manual for now - this is a side-by-side view for a human to review, not an automated signal.</div>
       <div class="kalshi-ticker">{{kalshi_low_ticker}}</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Kalshi · tomorrow's high market</div>
+      {{kalshi_tomorrow_high_rows}}
+      <div class="hint">Highlighted bracket is the one this tool's tomorrow-high estimate falls into.</div>
+      <div class="kalshi-ticker">{{kalshi_tomorrow_high_ticker}}</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Kalshi · tomorrow's low market</div>
+      {{kalshi_tomorrow_low_rows}}
+      <div class="hint">Highlighted bracket is the one this tool's tomorrow-low estimate falls into.</div>
+      <div class="kalshi-ticker">{{kalshi_tomorrow_low_ticker}}</div>
     </div>
 
     <div class="glass">

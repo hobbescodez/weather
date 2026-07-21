@@ -677,15 +677,18 @@ def estimate_daily_extremes(station_id, obs_limit=8):
                 estimated_low = current_temp
             low_source = "dewpoint_fallback"
 
-    # Tomorrow's high: prefer the actual NWS gridpoint forecast (HRRR-based,
-    # real atmospheric dynamics - it can see a heat event building that
-    # nothing in this station's own recent data would show any sign of).
-    # Fetch far enough out (48h) to cover all of tomorrow regardless of what
-    # time "now" is, then take the max forecasted temp within tomorrow's
-    # calendar date.
+    # Tomorrow's high and low: prefer the actual NWS gridpoint forecast
+    # (HRRR-based, real atmospheric dynamics - it can see a heat event
+    # building that nothing in this station's own recent data would show
+    # any sign of). Fetch far enough out (48h) to cover all of tomorrow
+    # regardless of what time "now" is, then take the max/min forecasted
+    # temp within tomorrow's calendar date. Both come from the same fetch,
+    # so they succeed or fall back together.
     tomorrow = today + timedelta(days=1)
     tomorrow_high_time = None
+    tomorrow_low_time = None
     tomorrow_source = "nws_forecast"
+    tomorrow_low_source = "nws_forecast"
     try:
         forecast_df = get_hourly_forecast(lat, lon, hours=48)
         tomorrow_forecast = forecast_df[forecast_df["time"].dt.date == tomorrow]
@@ -695,26 +698,42 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         tomorrow_high = float(peak_row["forecast_temp_f"])
         tomorrow_high_time = peak_row["time"]
         tomorrow_confidence = 75  # grounded in an actual forecast model, not a guess - but still next-day
+
+        trough_row = tomorrow_forecast.loc[tomorrow_forecast["forecast_temp_f"].idxmin()]
+        tomorrow_low = float(trough_row["forecast_temp_f"])
+        tomorrow_low_time = trough_row["time"]
+        tomorrow_low_confidence = 75
     except Exception:
         # Forecast unavailable - fall back to the old persistence guess
-        # (today's/yesterday's high, nudged by the current pressure trend)
-        # rather than crash. Confidence is capped low here on purpose: a
-        # short local trend genuinely can't see a day ahead on its own.
+        # (today's/yesterday's high or low, nudged by the current pressure
+        # trend) rather than crash. Confidence is capped low here on
+        # purpose: a short local trend genuinely can't see a day ahead on
+        # its own.
         #
-        # Anchor on today's high only once it's actually happened
-        # (high_status == "observed"); until then "estimated_high" is
-        # deliberately a conservative near-term floor (see above), not a
-        # stand-in for the day's eventual peak, and using it here would make
-        # tomorrow's guess track that same lowball number - e.g. checked at
-        # 6am, it would anchor on a not-yet-warmed-up ~60s reading instead of
-        # a real high. Yesterday's actual high is a much better baseline then.
+        # Anchor on today's high/low only once each is actually resolved
+        # (high_status == "observed" / low_status == "tonight"); until then
+        # "estimated_high"/"estimated_low" are deliberately conservative
+        # near-term values (see above), not stand-ins for the day's
+        # eventual extreme, and using them here would make tomorrow's guess
+        # track that same not-yet-settled number - e.g. checked at 6am,
+        # it would anchor on a not-yet-warmed-up ~60s reading instead of a
+        # real high. Yesterday's actual high/low is a much better baseline
+        # then.
         tomorrow_source = "persistence_fallback"
+        tomorrow_low_source = "persistence_fallback"
         if high_status == "observed":
             persistence_high = estimated_high
         elif yesterday_high is not None:
             persistence_high = yesterday_high
         else:
             persistence_high = estimated_high
+
+        if low_status == "tonight":
+            persistence_low = estimated_low
+        elif yesterday_low is not None:
+            persistence_low = yesterday_low
+        else:
+            persistence_low = estimated_low
 
         t0 = df["time"].iloc[0]
         elapsed_hours_all = (df["time"] - t0).dt.total_seconds() / 3600
@@ -727,7 +746,9 @@ def estimate_daily_extremes(station_id, obs_limit=8):
             pressure_adj, tomorrow_confidence = 1.0, 55  # rising pressure: current pattern more likely to hold
         else:
             pressure_adj, tomorrow_confidence = 0.0, 50
+        tomorrow_low_confidence = tomorrow_confidence
         tomorrow_high = persistence_high + pressure_adj
+        tomorrow_low = persistence_low + pressure_adj
 
     return {
         "as_of": now,
@@ -748,6 +769,10 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         "tomorrow_high_time": tomorrow_high_time,  # only set when tomorrow_source == "nws_forecast"
         "tomorrow_high_confidence_pct": tomorrow_confidence,
         "tomorrow_high_source": tomorrow_source,  # "nws_forecast" or "persistence_fallback"
+        "tomorrow_low_f": round(tomorrow_low, 1),
+        "tomorrow_low_time": tomorrow_low_time,  # only set when tomorrow_low_source == "nws_forecast"
+        "tomorrow_low_confidence_pct": tomorrow_low_confidence,
+        "tomorrow_low_source": tomorrow_low_source,  # "nws_forecast" or "persistence_fallback"
         "yesterday_high_f": round(yesterday_high, 2) if yesterday_high is not None else None,
         "yesterday_high_time": yesterday_high_time,
         "yesterday_low_f": round(yesterday_low, 2) if yesterday_low is not None else None,

@@ -152,6 +152,7 @@ def main():
     lat, lon, _ = get_station_location(STATION)
 
     today = date.today()
+    tomorrow = today + timedelta(days=1)
     try:
         kalshi_high = get_market_for_date(HIGH_SERIES, today)
     except Exception as e:
@@ -162,6 +163,16 @@ def main():
     except Exception as e:
         print(f"Kalshi low market fetch failed: {e}")
         kalshi_low = None
+    try:
+        kalshi_tomorrow_high = get_market_for_date(HIGH_SERIES, tomorrow)
+    except Exception as e:
+        print(f"Kalshi tomorrow high market fetch failed: {e}")
+        kalshi_tomorrow_high = None
+    try:
+        kalshi_tomorrow_low = get_market_for_date(LOW_SERIES, tomorrow)
+    except Exception as e:
+        print(f"Kalshi tomorrow low market fetch failed: {e}")
+        kalshi_tomorrow_low = None
 
     now = est["as_of"]
     window_start = now - timedelta(hours=SPARKLINE_HOURS)
@@ -232,6 +243,14 @@ def main():
             else f"confidence {extremes['tomorrow_high_confidence_pct']}%"
         ),
         "tomorrow_hint": TOMORROW_HINTS[extremes["tomorrow_high_source"]],
+        "tomorrow_low": f"{extremes['tomorrow_low_f']:.2f}",
+        "tomorrow_low_confidence_pct": extremes["tomorrow_low_confidence_pct"],
+        "tomorrow_low_meta": (
+            f"~{_fmt_time(extremes['tomorrow_low_time'])} · confidence {extremes['tomorrow_low_confidence_pct']}%"
+            if extremes["tomorrow_low_time"] is not None
+            else f"confidence {extremes['tomorrow_low_confidence_pct']}%"
+        ),
+        "tomorrow_low_hint": TOMORROW_HINTS[extremes["tomorrow_low_source"]],
         "yesterday_high": f"{extremes['yesterday_high_f']:.2f}" if extremes["yesterday_high_f"] is not None else "—",
         "yesterday_high_time": _fmt_time(extremes["yesterday_high_time"]) if extremes["yesterday_high_time"] is not None else "—",
         "yesterday_low": f"{extremes['yesterday_low_f']:.2f}" if extremes["yesterday_low_f"] is not None else "—",
@@ -248,6 +267,10 @@ def main():
             kalshi_low["brackets"],
             extremes["observed_low_so_far_f"] if extremes["low_status"] == "tonight" else extremes["estimated_low_f"],
         ) if kalshi_low else '<div class="hint">Market unavailable.</div>',
+        "kalshi_tomorrow_high_ticker": kalshi_tomorrow_high["event_ticker"] if kalshi_tomorrow_high else "no open market",
+        "kalshi_tomorrow_high_rows": build_kalshi_rows(kalshi_tomorrow_high["brackets"], extremes["tomorrow_high_f"]) if kalshi_tomorrow_high else '<div class="hint">Market not open yet.</div>',
+        "kalshi_tomorrow_low_ticker": kalshi_tomorrow_low["event_ticker"] if kalshi_tomorrow_low else "no open market",
+        "kalshi_tomorrow_low_rows": build_kalshi_rows(kalshi_tomorrow_low["brackets"], extremes["tomorrow_low_f"]) if kalshi_tomorrow_low else '<div class="hint">Market not open yet.</div>',
         "sky_class": sky_class,
         "condition_text": condition_text,
         "obs_json_url": obs_json_url,
