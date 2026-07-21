@@ -107,10 +107,16 @@ def _bracket_contains(bracket, value):
     cap = bracket["cap_strike"]
     if floor is not None and cap is not None:
         return floor <= value <= cap
-    if floor is not None:  # "X or above" - no cap
-        return value >= floor
-    if cap is not None:  # "X or below" - no floor
-        return value <= cap
+    if floor is not None:
+        # "X or above" tail bracket - its floor_strike reuses the same
+        # number as the adjacent ranged bracket's cap_strike (e.g. "64 or
+        # above" has floor=63, same as "62 to 63"'s cap=63), so it has to
+        # be strictly greater than or both brackets would match on 63.
+        return value > floor
+    if cap is not None:
+        # Same idea in reverse for "X or below" (e.g. "87 or below" has
+        # cap=88, same as "88 to 89"'s floor=88).
+        return value < cap
     return False
 
 
