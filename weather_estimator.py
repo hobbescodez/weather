@@ -154,6 +154,128 @@ def get_observation_history(station_id, limit=8, start=None, end=None):
 
 
 # ---------------------------------------------------------------------------
+# Forward-looking signals
+#
+# Everything above only ever looks backward: a trend fit on the station's own
+# last several observations. That's blind to anything that hasn't reached the
+# station yet - an approaching front, a marine push - which is exactly what
+# went wrong during the Jul 20 event (predictions off by -5 to -9.6F because
+# the model had no way to see the regime change coming). These two functions
+# pull in signals that *can* see it coming: a real forecast model, and an
+# upwind pressure gradient that tends to lead marine intrusions by 1-3 hours.
+# ---------------------------------------------------------------------------
+
+def get_hourly_forecast(lat, lon):
+    """
+    Fetch the NWS gridpoint hourly forecast (HRRR-model-based) for this
+    location, for roughly the next 12 hours. Unlike the trend/damping model
+    above, this has real atmospheric dynamics behind it - fronts, marine
+    pushes, large-scale flow - that a straight line fit through the last
+    8 observations has no way to represent. Returns a DataFrame of
+    (time, forecast_temp_f).
+    """
+    points_url = f"https://api.weather.gov/points/{lat:.4f},{lon:.4f}"
+    r = requests.get(points_url, headers={"Accept": "application/geo+json"})
+    r.raise_for_status()
+    forecast_url = r.json()["properties"]["forecastHourly"]
+
+    r2 = requests.get(forecast_url, headers={"Accept": "application/geo+json"})
+    r2.raise_for_status()
+    periods = r2.json()["properties"]["periods"]
+
+    rows = [
+        {"time": datetime.fromisoformat(p["startTime"]), "forecast_temp_f": p["temperature"]}
+        for p in periods[:12]
+    ]
+    return pd.DataFrame(rows)
+
+
+def _nws_forecast_temp_at(forecast_df, target_time):
+    """The forecast's nearest-hour temp to target_time, or None if the nearest
+    hour is more than an hour away (forecast doesn't cover that time)."""
+    if forecast_df is None or forecast_df.empty:
+        return None
+    deltas = (forecast_df["time"] - target_time).abs()
+    idx = deltas.idxmin()
+    if deltas[idx] > timedelta(hours=1):
+        return None
+    return forecast_df.loc[idx, "forecast_temp_f"]
+
+
+# KHQM (Hoquiam) reports reliably (checked: 8/8 recent observations with
+# pressure data). KUIL (Quillayute) is the other coastal option upwind of the
+# Chehalis Gap but was returning zero recent observations when checked, so it
+# sits second in line as a fallback rather than the default.
+UPWIND_STATION_CANDIDATES = ["KHQM", "KUIL"]
+
+
+def _fetch_upwind_df(start, end, candidates=None):
+    """Try each candidate upwind station in order; return (df, station_id) for
+    the first with usable data in this window, or (None, None) if all fail."""
+    for station in (candidates or UPWIND_STATION_CANDIDATES):
+        try:
+            return get_observation_history(station, start=start, end=end), station
+        except Exception:
+            continue
+    return None, None
+
+
+def get_pressure_gradient(df_local, df_upwind=None, upwind_station_id=None):
+    """
+    Marine-air intrusions into Puget Sound are driven by a pressure gradient
+    between the coast and the interior: when the interior (KSEA) heats up
+    faster than the coast, its pressure falls relative to the coast, and that
+    widening differential pulls cool marine air inland through gaps like the
+    Chehalis Gap - reaching KSEA anywhere from about 1 to 3 hours later.
+
+    Checked empirically against the Jul 20 event: the local-minus-upwind
+    (KSEA - KHQM) gradient flattened and briefly went negative in the hour
+    before the cooling dip, then recovered as temperatures resumed climbing.
+    So a *shrinking or negative-trending* gradient is the onshore-push
+    signature here - not a widening one.
+
+    df_upwind can be pre-fetched and passed in (e.g. by backtest, which pulls
+    the whole window once rather than re-fetching per rolling window). If
+    omitted, fetches a matching window around df_local's own span.
+
+    Returns (gradient_inhg, gradient_trend_inhg_per_hr, station_used, note).
+    note is None on success; otherwise a short explanation of why no gradient
+    was computed, so callers can fall back to no adjustment instead of
+    crashing when the upwind station is unavailable.
+    """
+    if df_upwind is None:
+        start = df_local["time"].iloc[0] - timedelta(minutes=20)
+        end = df_local["time"].iloc[-1] + timedelta(minutes=20)
+        candidates = [upwind_station_id] if upwind_station_id else None
+        df_upwind, used_station = _fetch_upwind_df(start, end, candidates)
+        if df_upwind is None:
+            return None, None, None, "no upwind station data available; no gradient adjustment applied"
+    else:
+        used_station = upwind_station_id or "prefetched"
+
+    merged = pd.merge_asof(
+        df_local[["time", "pressure_inhg"]].sort_values("time"),
+        df_upwind[["time", "pressure_inhg"]].sort_values("time"),
+        on="time", direction="nearest", tolerance=timedelta(minutes=20),
+        suffixes=("_local", "_upwind"),
+    )
+    merged = merged.dropna(subset=["pressure_inhg_local", "pressure_inhg_upwind"])
+    if len(merged) < 2:
+        return None, None, used_station, "not enough aligned upwind readings; no gradient adjustment applied"
+
+    merged["gradient"] = merged["pressure_inhg_local"] - merged["pressure_inhg_upwind"]
+    t0 = merged["time"].iloc[0]
+    elapsed = (merged["time"] - t0).dt.total_seconds() / 3600
+    gradient_now = merged["gradient"].iloc[-1]
+    if merged["gradient"].nunique() > 1:
+        gradient_trend = np.polyfit(elapsed, merged["gradient"], 1)[0]
+    else:
+        gradient_trend = 0.0
+
+    return round(gradient_now, 4), round(gradient_trend, 4), used_station, None
+
+
+# ---------------------------------------------------------------------------
 # Damping based on real sunrise/sunset
 # ---------------------------------------------------------------------------
 
@@ -233,28 +355,43 @@ def _cloud_wind_damping(df):
     return max(0.5, factor)
 
 
-def _pressure_trend_and_uncertainty(df, elapsed_hours, hours_ahead):
+def _pressure_trend_and_uncertainty(df, elapsed_hours, hours_ahead, gradient_trend=None):
     """
     Falling pressure signals a front/unsettled system may be approaching,
     but not which direction temp will move - so this widens the uncertainty
     band around the point estimate rather than shifting it.
+
+    gradient_trend, if given, is the local-minus-upwind pressure gradient's
+    own trend (see get_pressure_gradient) - a shrinking/negative-trending
+    gradient has empirically preceded marine air reaching KSEA (the Jul 20
+    event), the same kind of "something's changing, direction unclear from
+    here" signal as a falling local pressure trend. It widens uncertainty the
+    same way, as an independent check rather than a replacement.
+
     Returns (pressure_trend_inhg_per_hr, uncertainty_f).
     """
     base_uncertainty = 1.0 + 0.3 * hours_ahead  # baseline grows with horizon
 
     if df["pressure_inhg"].notna().sum() < 2:
-        return None, round(base_uncertainty, 1)
-
-    valid = df["pressure_inhg"].notna()
-    p_slope = np.polyfit(elapsed_hours[valid], df["pressure_inhg"][valid], 1)[0]
-
-    # a drop of ~0.03 inHg/hr or faster is a reasonably brisk pressure fall
-    if p_slope < 0:
-        uncertainty = base_uncertainty + min(2.0, abs(p_slope) * 40)
+        pressure_trend, uncertainty = None, base_uncertainty
     else:
-        uncertainty = base_uncertainty
+        valid = df["pressure_inhg"].notna()
+        p_slope = np.polyfit(elapsed_hours[valid], df["pressure_inhg"][valid], 1)[0]
 
-    return round(p_slope, 4), round(uncertainty, 1)
+        # a drop of ~0.03 inHg/hr or faster is a reasonably brisk pressure fall
+        if p_slope < 0:
+            uncertainty = base_uncertainty + min(2.0, abs(p_slope) * 40)
+        else:
+            uncertainty = base_uncertainty
+        pressure_trend = round(p_slope, 4)
+
+    # a gradient trend more negative than about -0.005 inHg/hr is a
+    # meaningfully shrinking gradient, not just noise in the ~0.01 inHg
+    # resolution these observations report at
+    if gradient_trend is not None and gradient_trend < -0.005:
+        uncertainty += min(1.5, abs(gradient_trend) * 60)
+
+    return pressure_trend, round(uncertainty, 1)
 
 
 # A short local trend (fit over the last handful of observations) is only a
@@ -267,9 +404,32 @@ def _pressure_trend_and_uncertainty(df, elapsed_hours, hours_ahead):
 TREND_HORIZON_HOURS = 6
 
 
-def estimate_from_df(df, hours_ahead, lat, lon):
-    """Core estimation logic, given a dataframe of observations. Reused by both
-    the live estimator and the backtest."""
+def estimate_from_df(
+    df, hours_ahead, lat, lon,
+    use_nws_forecast=True, nws_blend_mode="divergence",
+    use_gradient=True, df_upwind=None,
+):
+    """
+    Core estimation logic, given a dataframe of observations. Reused by both
+    the live estimator and the backtest.
+
+    use_nws_forecast: blend the trend/damping estimate with the NWS hourly
+        gridpoint forecast at target_time (see get_hourly_forecast). The
+        backtest disables this - forecastHourly only exposes the forecast as
+        issued right now, so there's no historical "what did the forecast say
+        3 hours before this point" to test against; blending it into a
+        backtest would either silently score today's forecast against past
+        observations (meaningless) or require fabricating a proxy forecast
+        history (more misleading than admitting the gap).
+    nws_blend_mode: "fixed" always blends 50/50. "divergence" blends 50/50
+        normally but shifts to 80% forecast / 20% trend when the two disagree
+        by more than 3F, on the theory that a big gap means the trend is
+        missing something (a front, a marine push) the forecast model's real
+        atmospheric dynamics can see.
+    use_gradient / df_upwind: see get_pressure_gradient. df_upwind lets a
+        caller (backtest) pre-fetch the upwind station's data once instead of
+        re-fetching per rolling window.
+    """
     latest = df.iloc[-1]
     now = latest["time"]
 
@@ -299,18 +459,47 @@ def estimate_from_df(df, hours_ahead, lat, lon):
     if slope != 0 and np.sign(slope) != _expected_trend_sign(now, lat, lon):
         combined_damping *= 0.4
 
-    pressure_trend, uncertainty_f = _pressure_trend_and_uncertainty(df, elapsed_hours, hours_ahead)
+    gradient_now = gradient_trend = gradient_station = gradient_note = None
+    if use_gradient:
+        gradient_now, gradient_trend, gradient_station, gradient_note = get_pressure_gradient(
+            df, df_upwind=df_upwind
+        )
+
+    pressure_trend, uncertainty_f = _pressure_trend_and_uncertainty(
+        df, elapsed_hours, hours_ahead, gradient_trend=gradient_trend
+    )
 
     raw_change = slope * min(hours_ahead, TREND_HORIZON_HOURS)
     damped_change = raw_change * combined_damping + spread_adjustment * np.sign(raw_change) * -1
 
-    estimated_temp = latest["temp_f"] + damped_change
+    trend_estimate = latest["temp_f"] + damped_change
     target_time = now + timedelta(hours=hours_ahead)
+
+    estimated_temp = trend_estimate
+    nws_forecast_temp = None
+    blend_weight_used = None
+    nws_note = "disabled for this call" if not use_nws_forecast else None
+    if use_nws_forecast:
+        try:
+            forecast_df = get_hourly_forecast(lat, lon)
+            nws_forecast_temp = _nws_forecast_temp_at(forecast_df, target_time)
+        except Exception:
+            nws_forecast_temp = None
+        if nws_forecast_temp is None:
+            nws_note = "NWS hourly forecast unavailable or target_time out of its range; using trend estimate only"
+        else:
+            if nws_blend_mode == "fixed":
+                w = 0.5
+            else:
+                w = 0.2 if abs(trend_estimate - nws_forecast_temp) > 3 else 0.5
+            blend_weight_used = w
+            estimated_temp = w * trend_estimate + (1 - w) * nws_forecast_temp
 
     return {
         "as_of": now,
         "target_time": target_time,
         "current_temp_f": round(latest["temp_f"], 1),
+        "trend_estimate_f": round(trend_estimate, 1),
         "estimated_temp_f": round(estimated_temp, 1),
         "estimated_range_f": (
             round(estimated_temp - uncertainty_f, 1),
@@ -322,14 +511,27 @@ def estimate_from_df(df, hours_ahead, lat, lon):
         "cloud_fraction": latest.get("cloud_fraction") if pd.notna(latest.get("cloud_fraction")) else None,
         "wind_mph": round(latest["wind_mph"], 1) if pd.notna(latest.get("wind_mph")) else None,
         "pressure_trend_inhg_per_hr": pressure_trend,
+        "pressure_gradient_inhg": gradient_now,
+        "pressure_gradient_trend_inhg_per_hr": gradient_trend,
+        "pressure_gradient_station": gradient_station,
+        "pressure_gradient_note": gradient_note,
+        "nws_forecast_temp_f": round(float(nws_forecast_temp), 1) if nws_forecast_temp is not None else None,
+        "blend_weight_used": blend_weight_used,
+        "nws_forecast_note": nws_note,
         "n_observations": len(df),
     }
 
 
-def estimate_temp(station_id, hours_ahead=3, obs_limit=8):
+def estimate_temp(
+    station_id, hours_ahead=3, obs_limit=8,
+    use_nws_forecast=True, nws_blend_mode="divergence", use_gradient=True,
+):
     lat, lon, name = get_station_location(station_id)
     df = get_observation_history(station_id, limit=obs_limit)
-    result = estimate_from_df(df, hours_ahead, lat, lon)
+    result = estimate_from_df(
+        df, hours_ahead, lat, lon,
+        use_nws_forecast=use_nws_forecast, nws_blend_mode=nws_blend_mode, use_gradient=use_gradient,
+    )
     result["station"] = station_id.upper()
     result["station_name"] = name
     return result
@@ -548,6 +750,17 @@ def backtest(station_id, hours_ahead=3, window_obs=8, lookback_days=5):
     estimate the temp at t + hours_ahead using only data up to t, and compare
     against the actual observation closest to t + hours_ahead.
 
+    The cross-station pressure gradient signal (get_pressure_gradient) IS
+    exercised here - real historical data exists for the upwind station too,
+    fetched once up front rather than re-fetched per rolling window. The NWS
+    hourly forecast blend is NOT: forecastHourly only exposes the forecast as
+    issued right now, so there's no way to ask what it would have said 3
+    hours before each historical point. Blending it in here would either
+    silently score today's forecast against past observations (meaningless)
+    or require fabricating a proxy forecast history - worse than just noting
+    the gap. See the live estimate for how much that signal actually moves
+    the point estimate.
+
     Returns a DataFrame of individual predictions plus a summary dict of
     error metrics (MAE, bias, RMSE).
     """
@@ -559,6 +772,9 @@ def backtest(station_id, hours_ahead=3, window_obs=8, lookback_days=5):
 
     if len(full_df) < window_obs + 2:
         raise ValueError("Not enough historical observations in this window to backtest.")
+
+    upwind_df, upwind_station = _fetch_upwind_df(start - timedelta(minutes=20), end + timedelta(minutes=20))
+    use_gradient = upwind_df is not None
 
     records = []
     for i in range(window_obs, len(full_df)):
@@ -576,7 +792,11 @@ def backtest(station_id, hours_ahead=3, window_obs=8, lookback_days=5):
             continue  # no observation close enough to target_time to score against
 
         try:
-            est = estimate_from_df(train_df, hours_ahead, lat, lon)
+            est = estimate_from_df(
+                train_df, hours_ahead, lat, lon,
+                use_nws_forecast=False,
+                use_gradient=use_gradient, df_upwind=upwind_df,
+            )
         except Exception:
             continue
 
@@ -595,6 +815,7 @@ def backtest(station_id, hours_ahead=3, window_obs=8, lookback_days=5):
             "sky_wind_damping": est["sky_wind_damping"],
             "cloud_fraction": est["cloud_fraction"],
             "wind_mph": est["wind_mph"],
+            "pressure_gradient_trend_inhg_per_hr": est["pressure_gradient_trend_inhg_per_hr"],
         })
 
     results_df = pd.DataFrame(records)
@@ -611,6 +832,13 @@ def backtest(station_id, hours_ahead=3, window_obs=8, lookback_days=5):
         # if this is far below ~0.9, the uncertainty band is too narrow (overconfident);
         # if it's near 1.0 with a huge band, it's too wide to be useful
         "pct_within_uncertainty_band": round(results_df["within_band"].mean(), 2),
+        "gradient_signal_used": use_gradient,
+        "gradient_upwind_station": upwind_station,
+        "nws_forecast_note": (
+            "not backtested - forecastHourly has no historical issue-time data; "
+            "this signal only affects the point estimate, not the uncertainty band, "
+            "so it's checked live instead (see estimate_temp)"
+        ),
     }
 
     return results_df, summary
