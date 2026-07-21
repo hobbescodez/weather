@@ -476,6 +476,67 @@ def estimate_daily_extremes(station_id, obs_limit=8):
     }
 
 
+def average_midday_growth(station_id, lookback_days=5, tolerance_minutes=30):
+    """
+    Pull `lookback_days` of historical observations and compute the average
+    temperature change from 12pm->2pm and 2pm->4pm across those days - a
+    simple empirical check on how much the model's peak-heat window actually
+    tends to warm, independent of the trend/damping machinery elsewhere in
+    this file.
+
+    A day is only included if it has an observation within
+    `tolerance_minutes` of all three of noon, 2pm, and 4pm local time.
+    """
+    end = datetime.now(PST)
+    start = end - timedelta(days=lookback_days)
+    df = get_observation_history(station_id, start=start, end=end)
+    df = df.copy()
+    df["date"] = df["time"].dt.date
+
+    def closest_at(day_df, target_hour):
+        day = day_df["time"].iloc[0].date()
+        tzinfo = day_df["time"].iloc[0].tzinfo
+        target = datetime.combine(day, time(target_hour, 0), tzinfo=tzinfo)
+        deltas = (day_df["time"] - target).abs()
+        idx = deltas.idxmin()
+        if deltas[idx] > timedelta(minutes=tolerance_minutes):
+            return None
+        return day_df.loc[idx]
+
+    growth_12_2, growth_2_4, per_day = [], [], []
+
+    for day, day_df in df.groupby("date"):
+        noon = closest_at(day_df, 12)
+        two = closest_at(day_df, 14)
+        four = closest_at(day_df, 16)
+        if noon is None or two is None or four is None:
+            continue
+
+        g1 = two["temp_f"] - noon["temp_f"]
+        g2 = four["temp_f"] - two["temp_f"]
+        growth_12_2.append(g1)
+        growth_2_4.append(g2)
+        per_day.append({
+            "date": str(day),
+            "noon_temp_f": round(noon["temp_f"], 1),
+            "2pm_temp_f": round(two["temp_f"], 1),
+            "4pm_temp_f": round(four["temp_f"], 1),
+            "growth_12_to_2_f": round(g1, 2),
+            "growth_2_to_4_f": round(g2, 2),
+        })
+
+    if not growth_12_2:
+        raise ValueError("No days in this window had readings within tolerance of noon, 2pm, and 4pm.")
+
+    return {
+        "station": station_id.upper(),
+        "n_days": len(growth_12_2),
+        "avg_growth_12pm_to_2pm_f": round(sum(growth_12_2) / len(growth_12_2), 2),
+        "avg_growth_2pm_to_4pm_f": round(sum(growth_2_4) / len(growth_2_4), 2),
+        "per_day": per_day,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Backtest
 # ---------------------------------------------------------------------------
