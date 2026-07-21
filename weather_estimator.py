@@ -288,7 +288,7 @@ def estimate_from_df(df, hours_ahead, lat, lon):
         "raw_trend_f_per_hr": round(slope, 2),
         "diurnal_damping": round(diurnal_damping, 2),
         "sky_wind_damping": round(sky_wind_damping, 2),
-        "cloud_fraction": latest.get("cloud_fraction"),
+        "cloud_fraction": latest.get("cloud_fraction") if pd.notna(latest.get("cloud_fraction")) else None,
         "wind_mph": round(latest["wind_mph"], 1) if pd.notna(latest.get("wind_mph")) else None,
         "pressure_trend_inhg_per_hr": pressure_trend,
         "n_observations": len(df),
