@@ -282,6 +282,16 @@ def get_pressure_gradient(df_local, df_upwind=None, upwind_station_id=None):
 # Damping based on real sunrise/sunset
 # ---------------------------------------------------------------------------
 
+# Fraction of the sunrise-to-sunset span at which the day's peak heat
+# typically falls. Checked against a week of real KSEA data (excluding one
+# day whose "max" landed at midnight - a calendar-day-boundary artifact from
+# a day that never really warmed, not informative about peak timing): 6
+# valid days averaged 0.708 (range 0.656-0.735), consistently well past the
+# previous hardcoded 0.65 - which was landing estimated peak-heat hour
+# 30-45 minutes earlier than where the actual daily max was showing up.
+PEAK_HEAT_FRACTION = 0.70
+
+
 def _hour_to_datetime(base_date, hour_decimal, tzinfo):
     """Convert a decimal hour (e.g. 15.65) on a given date into an aware datetime."""
     h = int(hour_decimal) % 24
@@ -300,8 +310,7 @@ def diurnal_damping_factor(current_time, hours_ahead, lat, lon):
     sun times for that date instead of hardcoded hours.
     """
     sunrise_h, sunset_h = get_sun_times(lat, lon, current_time.date())
-    # rough peak-heat proxy: ~2/3 of the way between sunrise and sunset
-    peak_h = sunrise_h + (sunset_h - sunrise_h) * 0.65
+    peak_h = sunrise_h + (sunset_h - sunrise_h) * PEAK_HEAT_FRACTION
 
     hour = current_time.hour + current_time.minute / 60
     target_hour = (hour + hours_ahead) % 24
@@ -327,7 +336,7 @@ def _expected_trend_sign(current_time, lat, lon):
     again right at dawn, which the sunrise boundary already accounts for).
     """
     sunrise_h, sunset_h = get_sun_times(lat, lon, current_time.date())
-    peak_h = sunrise_h + (sunset_h - sunrise_h) * 0.65
+    peak_h = sunrise_h + (sunset_h - sunrise_h) * PEAK_HEAT_FRACTION
     hour = current_time.hour + current_time.minute / 60
     return 1 if sunrise_h <= hour < peak_h else -1
 
@@ -609,7 +618,7 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         yesterday_high = yesterday_low = yesterday_high_time = yesterday_low_time = None
 
     sunrise_today, sunset_today = get_sun_times(lat, lon, today)
-    peak_today = sunrise_today + (sunset_today - sunrise_today) * 0.65
+    peak_today = sunrise_today + (sunset_today - sunrise_today) * PEAK_HEAT_FRACTION
     hour = now.hour + now.minute / 60
 
     high_time = _hour_to_datetime(today, peak_today, now.tzinfo)
