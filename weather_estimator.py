@@ -577,12 +577,13 @@ def estimate_daily_extremes(station_id, obs_limit=8):
       the *next* one, which may be many hours away across sunset): trend
       extrapolation has the same problem, and additionally the recent local
       slope is often still warming at that point, which would extrapolate
-      into a "low" warmer than the current temperature. Instead this uses a
-      standard radiative-cooling heuristic: on a clear, calm night the
-      overnight minimum tends toward the dewpoint (further cooling slows as
-      air nears saturation); clouds/wind suppress that drop. Reuses the same
-      cloud/wind damping factor as the short-term model, just aimed at a
-      different physical effect.
+      into a "low" warmer than the current temperature. Prefers the NWS
+      forecast's temp at the (sun-derived) estimated low time; falls back to
+      a radiative-cooling heuristic if that's unavailable - on a clear, calm
+      night the overnight minimum tends toward the dewpoint (further cooling
+      slows as air nears saturation), clouds/wind suppress that drop. Reuses
+      the same cloud/wind damping factor as the short-term model, just aimed
+      at a different physical effect.
     """
     lat, lon, name = get_station_location(station_id)
     df = get_observation_history(station_id, limit=obs_limit)
@@ -628,21 +629,44 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         estimated_low = min(observed_low, low_est["estimated_temp_f"])
         low_status = "today"  # still before dawn; today's low is imminent
         low_time = _hour_to_datetime(today, sunrise_today, now.tzinfo)
+        low_source = "trend_model"  # imminent (a few hours out at most) - the short-term trend model is fine here
     else:
-        latest = df.iloc[-1]
-        current_temp = latest["temp_f"]
-        current_dewpoint = latest.get("dewpoint_f")
-        if pd.notna(current_dewpoint):
-            sky_wind = _cloud_wind_damping(df)  # 0.5 (cloudy/windy) .. 1.0 (clear/calm)
-            cooling_fraction = 0.3 + 0.5 * (sky_wind - 0.5) / 0.5
-            gap = max(0.0, current_temp - current_dewpoint)
-            estimated_low = current_temp - gap * cooling_fraction
-        else:
-            estimated_low = current_temp
         low_status = "tonight"  # today's low already happened; forecasting the next one
         tomorrow = today + timedelta(days=1)
         sunrise_tomorrow, _ = get_sun_times(lat, lon, tomorrow)
         low_time = _hour_to_datetime(tomorrow, sunrise_tomorrow, now.tzinfo)
+
+        # Prefer the actual NWS forecast's temp at the sun-computed low_time
+        # (same reasoning as tomorrow's high: real atmospheric dynamics beat
+        # a heuristic). Keeping low_time itself sun-derived - not the
+        # forecast's own argmin - matches "estimated hottest/coldest time of
+        # day, based on the sun" elsewhere on the dashboard; only the value
+        # at that time changes source.
+        try:
+            forecast_df = get_hourly_forecast(lat, lon, hours=24)
+            nws_low = _nws_forecast_temp_at(forecast_df, low_time)
+            if nws_low is None:
+                raise ValueError("forecast doesn't cover the estimated low time")
+            estimated_low = float(nws_low)
+            low_source = "nws_forecast"
+        except Exception:
+            # Forecast unavailable - fall back to the radiative-cooling
+            # heuristic: on a clear, calm night the overnight minimum tends
+            # toward the dewpoint (further cooling slows as air nears
+            # saturation); clouds/wind suppress that drop. Reuses the same
+            # cloud/wind damping factor as the short-term model, just aimed
+            # at a different physical effect.
+            latest = df.iloc[-1]
+            current_temp = latest["temp_f"]
+            current_dewpoint = latest.get("dewpoint_f")
+            if pd.notna(current_dewpoint):
+                sky_wind = _cloud_wind_damping(df)  # 0.5 (cloudy/windy) .. 1.0 (clear/calm)
+                cooling_fraction = 0.3 + 0.5 * (sky_wind - 0.5) / 0.5
+                gap = max(0.0, current_temp - current_dewpoint)
+                estimated_low = current_temp - gap * cooling_fraction
+            else:
+                estimated_low = current_temp
+            low_source = "dewpoint_fallback"
 
     # Tomorrow's high: prefer the actual NWS gridpoint forecast (HRRR-based,
     # real atmospheric dynamics - it can see a heat event building that
@@ -706,6 +730,7 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         "high_status": high_status,
         "estimated_low_f": round(estimated_low, 1),
         "low_status": low_status,
+        "low_source": low_source,  # "trend_model", "nws_forecast", or "dewpoint_fallback"
         "observed_high_so_far_f": round(observed_high, 2),
         "observed_high_so_far_time": observed_high_time,  # when that actual high was recorded
         "observed_low_so_far_f": round(observed_low, 2),
