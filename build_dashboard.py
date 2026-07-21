@@ -81,6 +81,22 @@ def pressure_chip(trend):
     return ("steady", "chip-neutral")
 
 
+def build_cloud_icon_svg(cloud_pct):
+    """A simple cloud outline that fills bottom-up by cloud_pct, like a
+    gauge - so cloud cover reads as a shape at a glance, not just a lone
+    percentage number."""
+    pct = cloud_pct if cloud_pct is not None else 0
+    frac = max(0.0, min(1.0, pct / 100))
+    fill_h = 24 * frac
+    fill_y = 24 - fill_h
+    cloud_path = "M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"
+    return f"""<svg viewBox="0 0 24 24" width="30" height="30" class="cloud-icon" role="img" aria-label="{pct:.0f}% cloud cover">
+  <path d="{cloud_path}" class="cloud-icon-outline" />
+  <clipPath id="cloud-fill-clip"><rect x="0" y="{fill_y:.2f}" width="24" height="{fill_h:.2f}" /></clipPath>
+  <path d="{cloud_path}" class="cloud-icon-fill" clip-path="url(#cloud-fill-clip)" />
+</svg>""".strip()
+
+
 def _bracket_contains(bracket, value):
     floor = bracket["floor_strike"]
     cap = bracket["cap_strike"]
@@ -215,6 +231,7 @@ def main():
 
     cloud_pct = est["cloud_fraction"]
     cloud_label = f"{round(cloud_pct * 100)}%" if cloud_pct is not None else "—"
+    cloud_icon_svg = build_cloud_icon_svg(cloud_pct * 100 if cloud_pct is not None else None)
 
     confidence_pct = round(est["diurnal_damping"] * est["sky_wind_damping"] * 100)
 
@@ -243,6 +260,7 @@ def main():
         "trend_per_hr": f"{est['raw_trend_f_per_hr']:+.2f}",
         "wind_mph": f"{est['wind_mph']:.2f}" if est["wind_mph"] is not None else "—",
         "cloud_label": cloud_label,
+        "cloud_icon_svg": cloud_icon_svg,
         "pressure_label": p_label,
         "pressure_class": p_class,
         "confidence_pct": confidence_pct,

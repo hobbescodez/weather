@@ -261,6 +261,13 @@
     font-weight: 500;
     font-variant-numeric: tabular-nums;
   }
+  .cloud-value {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .cloud-icon-outline { fill: none; stroke: var(--text-faint); stroke-width: 1.6; stroke-linejoin: round; }
+  .cloud-icon-fill { fill: var(--text-strong); }
 
   .chip {
     display: inline-flex;
@@ -530,7 +537,10 @@
         </div>
         <div class="stat">
           <div class="label">Cloud cover</div>
-          <div class="value">{{cloud_label}}</div>
+          <div class="value cloud-value">
+            {{cloud_icon_svg}}
+            <span>{{cloud_label}}</span>
+          </div>
         </div>
         <div class="stat">
           <div class="label">Pressure</div>
