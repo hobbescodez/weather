@@ -298,6 +298,18 @@
     border-radius: 2px;
   }
 
+  .kalshi-estimate {
+    font-size: 13px;
+    color: var(--text-soft);
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--glass-line);
+  }
+  .kalshi-estimate strong {
+    color: var(--text-strong);
+    font-variant-numeric: tabular-nums;
+  }
+
   .kalshi-row {
     display: flex;
     align-items: center;
@@ -311,10 +323,34 @@
     background: var(--glass-bg-strong);
     border: 1px solid var(--glass-border);
   }
+  .kalshi-row-thin { opacity: 0.62; }
   .kalshi-label { color: var(--text-soft); font-variant-numeric: tabular-nums; }
+  .kalshi-thin-flag {
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    border: 1px solid var(--glass-border);
+    border-radius: 4px;
+    padding: 1px 4px;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+  .kalshi-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+  }
   .kalshi-pct {
     font-weight: 600;
     color: var(--text-strong);
+    font-variant-numeric: tabular-nums;
+  }
+  .kalshi-spread {
+    font-size: 10.5px;
+    color: var(--text-faint);
     font-variant-numeric: tabular-nums;
   }
   .kalshi-ticker {

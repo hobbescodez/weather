@@ -93,26 +93,51 @@ def _bracket_contains(bracket, value):
     return False
 
 
-def build_kalshi_rows(brackets, our_estimate):
+THIN_VOLUME_THRESHOLD = 5  # contracts traded - below this, last_price is easy to be stale/unreliable
+
+
+def build_kalshi_rows(brackets, our_estimate, estimate_label):
     """
     HTML rows for one Kalshi bracket market, highlighting whichever bracket
     our own point estimate currently falls into - a quick visual check of
     whether the model and the market agree, without computing a full
     probability distribution (that's a deliberate next step, not this one).
+
+    Also prints our_estimate itself right above the brackets, so the number
+    driving the highlight is legible next to the market's own pricing - not
+    just implied by which row lit up.
+
+    last_price is the most recent trade, not "percent of people betting" -
+    it's the market's implied probability (yes/no contracts settle at $1/$0,
+    so price ~= probability under normal arbitrage). Bid/ask and volume are
+    shown alongside it since a lightly-traded bracket's last_price can be
+    stale; low-volume rows are dimmed as a caution, not hidden.
     """
     if not brackets:
         return '<div class="hint">Market unavailable.</div>'
 
-    rows = []
+    rows = [f'<div class="kalshi-estimate">{estimate_label}: <strong>{our_estimate:.2f}°F</strong></div>']
     for b in brackets:
         pct = round(b["last_price"] * 100) if b["last_price"] is not None else None
         pct_label = f"{pct}%" if pct is not None else "—"
+
+        bid = round(b["yes_bid"] * 100) if b["yes_bid"] is not None else None
+        ask = round(b["yes_ask"] * 100) if b["yes_ask"] is not None else None
+        spread_label = f"bid {bid}¢ / ask {ask}¢" if bid is not None and ask is not None else "no quote"
+
+        is_thin = b["volume"] is None or b["volume"] < THIN_VOLUME_THRESHOLD
+        thin_class = " kalshi-row-thin" if is_thin else ""
+        thin_flag = ' <span class="kalshi-thin-flag">thin</span>' if is_thin else ""
+
         is_match = _bracket_contains(b, our_estimate)
         match_class = " kalshi-row-match" if is_match else ""
         rows.append(
-            f'<div class="kalshi-row{match_class}">'
-            f'<span class="kalshi-label">{b["label"]}</span>'
+            f'<div class="kalshi-row{match_class}{thin_class}">'
+            f'<span class="kalshi-label">{b["label"]}{thin_flag}</span>'
+            f'<span class="kalshi-meta">'
             f'<span class="kalshi-pct">{pct_label}</span>'
+            f'<span class="kalshi-spread">{spread_label}</span>'
+            f"</span>"
             f"</div>"
         )
     return "\n".join(rows)
@@ -256,7 +281,10 @@ def main():
         "yesterday_low": f"{extremes['yesterday_low_f']:.2f}" if extremes["yesterday_low_f"] is not None else "—",
         "yesterday_low_time": _fmt_time(extremes["yesterday_low_time"]) if extremes["yesterday_low_time"] is not None else "—",
         "kalshi_high_ticker": kalshi_high["event_ticker"] if kalshi_high else "no open market",
-        "kalshi_high_rows": build_kalshi_rows(kalshi_high["brackets"], extremes["estimated_high_f"]) if kalshi_high else '<div class="hint">Market unavailable.</div>',
+        "kalshi_high_rows": build_kalshi_rows(
+            kalshi_high["brackets"], extremes["estimated_high_f"],
+            "Observed high" if extremes["high_status"] == "observed" else "Estimated high",
+        ) if kalshi_high else '<div class="hint">Market unavailable.</div>',
         "kalshi_low_ticker": kalshi_low["event_ticker"] if kalshi_low else "no open market",
         # Today's Kalshi low market settles on TODAY's calendar-day low. Once
         # that's already happened (low_status == "tonight"), estimated_low_f
@@ -266,11 +294,12 @@ def main():
         "kalshi_low_rows": build_kalshi_rows(
             kalshi_low["brackets"],
             extremes["observed_low_so_far_f"] if extremes["low_status"] == "tonight" else extremes["estimated_low_f"],
+            "Observed low" if extremes["low_status"] == "tonight" else "Estimated low",
         ) if kalshi_low else '<div class="hint">Market unavailable.</div>',
         "kalshi_tomorrow_high_ticker": kalshi_tomorrow_high["event_ticker"] if kalshi_tomorrow_high else "no open market",
-        "kalshi_tomorrow_high_rows": build_kalshi_rows(kalshi_tomorrow_high["brackets"], extremes["tomorrow_high_f"]) if kalshi_tomorrow_high else '<div class="hint">Market not open yet.</div>',
+        "kalshi_tomorrow_high_rows": build_kalshi_rows(kalshi_tomorrow_high["brackets"], extremes["tomorrow_high_f"], "Estimated high") if kalshi_tomorrow_high else '<div class="hint">Market not open yet.</div>',
         "kalshi_tomorrow_low_ticker": kalshi_tomorrow_low["event_ticker"] if kalshi_tomorrow_low else "no open market",
-        "kalshi_tomorrow_low_rows": build_kalshi_rows(kalshi_tomorrow_low["brackets"], extremes["tomorrow_low_f"]) if kalshi_tomorrow_low else '<div class="hint">Market not open yet.</div>',
+        "kalshi_tomorrow_low_rows": build_kalshi_rows(kalshi_tomorrow_low["brackets"], extremes["tomorrow_low_f"], "Estimated low") if kalshi_tomorrow_low else '<div class="hint">Market not open yet.</div>',
         "sky_class": sky_class,
         "condition_text": condition_text,
         "obs_json_url": obs_json_url,
