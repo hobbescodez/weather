@@ -81,6 +81,13 @@ def get_observation_history(station_id, limit=8, start=None, end=None):
     url = f"https://api.weather.gov/stations/{station_id.upper()}/observations"
 
     if start is not None and end is not None:
+        # The API's `end` bound is exclusive in practice - a request with
+        # end=<some observation's exact timestamp> silently drops that
+        # observation. Callers reasonably expect start/end to be inclusive
+        # (e.g. "today's observations" using end=<the latest reading's own
+        # timestamp>), so nudge it forward slightly before sending.
+        end = end + timedelta(minutes=1)
+
         # The API returns at most 500 observations per request, newest first,
         # and exposes a `pagination.next` cursor URL for older pages. A busy
         # station (e.g. KSEA reports every few minutes) can blow past 500
@@ -389,11 +396,26 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         low_time = _hour_to_datetime(tomorrow, sunrise_tomorrow, now.tzinfo)
 
     # Tomorrow's high: there's no real forecast model behind this - just a
-    # persistence guess (assume tomorrow's peak looks like today's) nudged by
-    # the current pressure trend, which is the only signal this station-only
-    # tool has about a system change coming. Confidence is capped low and
-    # explicitly separate from today's sun-grounded numbers above, since a
-    # short local trend genuinely can't see a day ahead.
+    # persistence guess nudged by the current pressure trend, which is the
+    # only signal this station-only tool has about a system change coming.
+    # Confidence is capped low and explicitly separate from today's
+    # sun-grounded numbers above, since a short local trend genuinely can't
+    # see a day ahead.
+    #
+    # Anchor on today's high only once it's actually happened (high_status ==
+    # "observed"); until then "estimated_high" is deliberately a conservative
+    # near-term floor (see above), not a stand-in for the day's eventual
+    # peak, and using it here would make tomorrow's guess track that same
+    # lowball number - e.g. checked at 6am, it would anchor on a
+    # not-yet-warmed-up ~60s reading instead of a real high. Yesterday's
+    # actual high is a much better persistence baseline in that case.
+    if high_status == "observed":
+        persistence_high = estimated_high
+    elif yesterday_high is not None:
+        persistence_high = yesterday_high
+    else:
+        persistence_high = estimated_high
+
     t0 = df["time"].iloc[0]
     elapsed_hours_all = (df["time"] - t0).dt.total_seconds() / 3600
     pressure_trend, _ = _pressure_trend_and_uncertainty(df, elapsed_hours_all, 24)
@@ -405,7 +427,7 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         pressure_adj, tomorrow_confidence = 1.0, 55  # rising pressure: current pattern more likely to hold
     else:
         pressure_adj, tomorrow_confidence = 0.0, 50
-    tomorrow_high = estimated_high + pressure_adj
+    tomorrow_high = persistence_high + pressure_adj
 
     return {
         "as_of": now,
