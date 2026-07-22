@@ -148,6 +148,20 @@ def get_observation_history(station_id, limit=8, start=None, end=None):
             "cloud_fraction": _cloud_fraction(cloud_layers),
         })
 
+    if start is not None and end is not None:
+        # `start` above only controls when to STOP paginating (older pages
+        # keep getting fetched until one crosses it) - it never actually
+        # trimmed the collected rows to the requested window. A single
+        # page already covers 500 observations (~1.7 days at KSEA's
+        # reporting cadence), so any query for a window shorter than that
+        # - e.g. "today so far" checked a few hours after midnight -
+        # silently kept observations from days earlier in the same
+        # DataFrame, which then quietly won the min()/max() if they
+        # happened to be more extreme. Confirmed directly: a request for
+        # today's midnight-to-now window came back containing readings
+        # from two days prior.
+        rows = [r for r in rows if start <= r["time"] <= end]
+
     if not rows:
         raise ValueError("No valid temperature readings for the requested window.")
     df = pd.DataFrame(rows).sort_values("time").reset_index(drop=True)
