@@ -81,7 +81,9 @@ def build_volume_bars_svg(hourly, tzinfo, width=640, height=110):
         return '<div class="hint">No trades in this window yet.</div>'
 
     pad_x, pad_top, pad_bottom = 4, 10, 18
-    values = [h["dollars"] for h in hourly]
+    # Contracts, not dollars - this is the same unit Kalshi's own "Volume"
+    # figure uses, so the chart matches what you'd see on their site.
+    values = [h["contracts"] for h in hourly]
     max_val = max(max(values), 1.0)
     n = len(hourly)
     gap = 3
@@ -89,20 +91,20 @@ def build_volume_bars_svg(hourly, tzinfo, width=640, height=110):
 
     bars = []
     for i, h in enumerate(hourly):
-        bar_h = (height - pad_top - pad_bottom) * (h["dollars"] / max_val)
+        bar_h = (height - pad_top - pad_bottom) * (h["contracts"] / max_val)
         x = pad_x + i * (bar_w + gap)
         y = height - pad_bottom - bar_h
         label = h["hour_end"].astimezone(tzinfo).strftime("%-I%p").lower()
         bars.append(
             f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{max(bar_h, 1):.1f}" '
-            f'class="volume-bar"><title>{label}: ${h["dollars"]:,.0f}</title></rect>'
+            f'class="volume-bar"><title>{label}: {h["contracts"]:,.0f} contracts (≈${h["dollars"]:,.0f})</title></rect>'
         )
 
     first_label = hourly[0]["hour_end"].astimezone(tzinfo).strftime("%-I%p").lower()
     last_label = hourly[-1]["hour_end"].astimezone(tzinfo).strftime("%-I%p").lower()
 
     return f"""
-<svg viewBox="0 0 {width} {height}" class="volume-chart" preserveAspectRatio="none" role="img" aria-label="Estimated dollar volume traded per hour">
+<svg viewBox="0 0 {width} {height}" class="volume-chart" preserveAspectRatio="none" role="img" aria-label="Contracts traded per hour">
   {"".join(bars)}
 </svg>
 <div class="spark-caption"><span>{first_label}</span><span>{last_label}</span></div>
@@ -243,7 +245,14 @@ def main():
 
     record_snapshot(extremes)
 
-    today = date.today()
+    now = est["as_of"]
+
+    # Kalshi's KSEA markets are dated by Seattle's own calendar day, not
+    # the system clock's - this container runs on UTC, which is already
+    # into the next day while it's still evening in Seattle (UTC-7/8).
+    # date.today() here would silently fetch tomorrow's just-opened, still
+    # nearly-empty event as if it were "today's" actively-trading one.
+    today = now.date()
     tomorrow = today + timedelta(days=1)
     try:
         kalshi_high = get_market_for_date(HIGH_SERIES, today)
@@ -277,7 +286,6 @@ def main():
         print(f"Kalshi tomorrow low market fetch failed: {e}")
         kalshi_tomorrow_low = None
 
-    now = est["as_of"]
     window_start = now - timedelta(hours=SPARKLINE_HOURS)
     hist = get_observation_history(STATION, start=window_start, end=now)
 
@@ -380,9 +388,11 @@ def main():
         "kalshi_tomorrow_high_rows": build_kalshi_rows(kalshi_tomorrow_high["brackets"], extremes["tomorrow_high_f"], "Estimated high") if kalshi_tomorrow_high else '<div class="hint">Market not open yet.</div>',
         "kalshi_tomorrow_low_ticker": kalshi_tomorrow_low["event_ticker"] if kalshi_tomorrow_low else "no open market",
         "kalshi_tomorrow_low_rows": build_kalshi_rows(kalshi_tomorrow_low["brackets"], extremes["tomorrow_low_f"], "Estimated low") if kalshi_tomorrow_low else '<div class="hint">Market not open yet.</div>',
-        "high_volume_total": f"${high_volume['total_dollars']:,.0f}" if high_volume else "—",
+        "high_volume_total": f"{high_volume['total_contracts']:,.0f}" if high_volume else "—",
+        "high_volume_dollars_est": f"≈${high_volume['total_dollars']:,.0f} est." if high_volume else "—",
         "high_volume_svg": build_volume_bars_svg(high_volume["hourly"], now.tzinfo) if high_volume else '<div class="hint">Volume unavailable.</div>',
-        "low_volume_total": f"${low_volume['total_dollars']:,.0f}" if low_volume else "—",
+        "low_volume_total": f"{low_volume['total_contracts']:,.0f}" if low_volume else "—",
+        "low_volume_dollars_est": f"≈${low_volume['total_dollars']:,.0f} est." if low_volume else "—",
         "low_volume_svg": build_volume_bars_svg(low_volume["hourly"], now.tzinfo) if low_volume else '<div class="hint">Volume unavailable.</div>',
         "sky_class": sky_class,
         "condition_text": condition_text,
