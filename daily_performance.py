@@ -12,11 +12,11 @@ layer introduced). Re-running finalize_day() for an already-finalized
 date is a no-op.
 
 Sign convention: peak_temp_error_f and peak_time_error_minutes are both
-(actual - predicted) - so positive means the actual value/time came in
-*after*/*higher than* predicted. This is the opposite sign from
-weather_estimator.backtest()'s error_f (estimated - actual, "positive =
-estimator runs warm") - flagged here explicitly since both modules use
-similar bias/mae naming but on oppositely-signed errors.
+(predicted - actual) - the same direction as weather_estimator.backtest()'s
+error_f ("positive = estimator runs warm"). Positive peak_temp_error_f
+means the model's predicted temp ran warm/high vs. what actually
+happened; positive peak_time_error_minutes means the model predicted the
+peak later than it actually occurred.
 
 Run this file directly to finalize any completed days not yet in the
 log:
@@ -238,9 +238,9 @@ def _finalize_side(station_id, day, side, actuals, prediction, series_ticker, tz
         _observed_temp_at(df, predicted_time - timedelta(hours=1)) if predicted_time is not None else None
     )
 
-    peak_temp_error_f = round(actual_temp - predicted_temp, 2) if predicted_temp is not None else None
+    peak_temp_error_f = round(predicted_temp - actual_temp, 2) if predicted_temp is not None else None
     peak_time_error_minutes = (
-        round((actual_time - predicted_time).total_seconds() / 60, 1) if predicted_time is not None else None
+        round((predicted_time - actual_time).total_seconds() / 60, 1) if predicted_time is not None else None
     )
 
     record = {
@@ -477,9 +477,8 @@ def _paper_trading_stats(records):
 
 
 def _side_month_stats(records, side):
-    """Reuses backtest()'s mae_f/bias_f naming (weather_estimator.py) for
-    the same concepts here - see this module's docstring for the sign
-    convention, which is the mirror image of backtest's."""
+    """Reuses backtest()'s mae_f/bias_f naming AND sign convention
+    (weather_estimator.py) - see this module's docstring."""
     temp_errors = [r[side]["peak_temp_error_f"] for r in records if r[side]["peak_temp_error_f"] is not None]
     time_errors = [r[side]["peak_time_error_minutes"] for r in records if r[side]["peak_time_error_minutes"] is not None]
     volumes = [r[side]["kalshi_peak_volume_contracts"] for r in records if r[side]["kalshi_peak_volume_contracts"] is not None]

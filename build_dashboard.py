@@ -168,6 +168,9 @@ def build_weekly_performance_table(rows, side):
         "<th>Kalshi peak vol.</th><th>Kalshi implied</th></tr>"
     )
     body = []
+    flagged = []  # (date_label, reason) - rendered as a persistent caption below
+    # the table, since the inline ⚠'s hover-only title tooltip is easy to
+    # miss (doesn't work on mobile taps or in a static PNG export at all).
     for r in rows:
         s = r.get(side)
         date_label = r["date"][5:]  # MM-DD is plenty given the 7-day window
@@ -175,7 +178,11 @@ def build_weekly_performance_table(rows, side):
             body.append(f'<tr><td>{date_label}</td><td colspan="8" class="perf-nodata">no data</td></tr>')
             continue
 
-        flag = f' <span class="perf-flag" title="{s["data_quality_flag"]}">⚠</span>' if s.get("data_quality_flag") else ""
+        if s.get("data_quality_flag"):
+            flag = f' <span class="perf-flag" title="{s["data_quality_flag"]}">⚠</span>'
+            flagged.append((date_label, s["data_quality_flag"]))
+        else:
+            flag = ""
         predicted = (
             f"{_fmt_dt_short(s['predicted_peak_time'])} · {_fmt_num(s['predicted_peak_temp'])}°"
             if s["predicted_peak_temp"] is not None else "—"
@@ -202,7 +209,14 @@ def build_weekly_performance_table(rows, side):
             f"<td>{kalshi_implied}</td>"
             "</tr>"
         )
-    return f'<table class="perf-table"><thead>{header}</thead><tbody>{"".join(body)}</tbody></table>'
+    table_html = f'<table class="perf-table"><thead>{header}</thead><tbody>{"".join(body)}</tbody></table>'
+    if not flagged:
+        return table_html
+
+    caption_lines = "".join(
+        f'<div>⚠ {date_label}: {reason}</div>' for date_label, reason in flagged
+    )
+    return table_html + f'<div class="perf-flag-caption">{caption_lines}</div>'
 
 
 def build_monthly_stats_rows(stats):
@@ -357,7 +371,8 @@ def main():
         for date_str, side in lock_result["newly_locked"]:
             side_state = lock_result["state"][date_str][side]
             if not side_state["skipped_missed_window"]:
-                print(f"ALERT_SCHEDULE_NEEDED side={side} date={date_str} target_alert_time={side_state['target_alert_time']}")
+                for checkpoint in side_state["checkpoints"]:
+                    print(f"ALERT_SCHEDULE_NEEDED side={side} date={date_str} target_alert_time={checkpoint}")
     except Exception as e:
         print(f"peak_alerts: get_or_lock_daily_targets failed: {e}")
 

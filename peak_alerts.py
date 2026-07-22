@@ -1,7 +1,7 @@
 """
-Sends a text ~1 hour before the model's estimated daily high/low, so
-there's a heads-up close to the actual turning point rather than a
-generic morning forecast.
+Sends a text near the model's estimated daily high/low, so there's a
+heads-up close to the actual turning point rather than a generic
+morning forecast.
 
 Delivery: Twilio's SMS REST API (https://api.twilio.com). Two earlier
 approaches were tried and ruled out first:
@@ -13,29 +13,57 @@ approaches were tried and ruled out first:
     own registered email address, not to arbitrary third-party
     recipients like a carrier gateway, without first verifying a domain.
 Twilio sends directly to the phone number over SMS - no email gateway,
-no domain-verification requirement, small per-message cost.
+no domain-verification requirement, small per-message cost. (As of this
+writing, sending is still blocked on Twilio's own side pending Trust
+Hub / A2P compliance registration on the account - the account owner
+needs to finish that in the Twilio console; nothing in this module can
+complete it. Once that clears, sends will start working with no code
+changes needed here.)
 
 Trigger logic (see get_or_lock_daily_targets / check_and_send):
-  - Once per day per extreme (high, low), the target alert time
-    (predicted_peak_time - 1 hour) is locked in from whatever the
-    model's estimate is at the moment of locking - it does NOT keep
-    re-chasing the target if the model's peak-time estimate drifts
-    later in the day. That avoids both double-sends and never firing
-    because the target kept moving.
+  - A fixed "1 hour before peak" offset can land exactly when the
+    model's own trend-confidence is lowest (right at a turning point),
+    which is the worst time to text a number that's likely to move. So
+    instead of a single target instant, each extreme locks a WINDOW:
+      window_start  = predicted_peak_time - LEAD_HOURS (1 hour) - the
+                       earliest we'd ever send
+      hard_cutoff   = predicted_peak_time - CUTOFF_MINUTES (20 min) -
+                       the latest we'd wait before sending regardless
+    Within that window, the text goes out at the first checkpoint where
+    trend_confidence (the same diurnal_damping * sky_wind_damping the
+    dashboard shows) clears CONFIDENCE_THRESHOLD_PCT, OR at hard_cutoff
+    if confidence never clears the bar that day - whichever comes
+    first. That way a low-confidence guess doesn't go out too early,
+    and the text still always goes out by hard_cutoff even on a day
+    the model stays unsure the whole window.
+  - The window is locked once per day per extreme from whatever the
+    model's estimate is at lock time - it does NOT keep re-chasing the
+    target if the model's peak-time estimate drifts later in the day.
+    That avoids both double-sends and never firing because the target
+    kept moving.
+  - Checking the window requires re-evaluating confidence at more than
+    one instant, so lock-in also produces a handful of checkpoint
+    timestamps spanning the window (10 minutes apart); each one asks
+    the same question ("send now?") and the first "yes" wins - see
+    CHECK_INTERVAL_MINUTES. Re-checking is free: check_and_send is
+    idempotent via the "sent" flag, so a checkpoint firing after the
+    text already went out is a silent no-op.
   - The actual send re-checks the model's CURRENT estimate at fire time
-    (not the value cached at lock time) - the target *time* is locked,
-    the *content* is always fresh.
+    (not the value cached at lock time) - the window is locked, the
+    *content* is always fresh.
   - "Already sent today for this extreme" is persisted to
     peak_alerts_state.json (mutable per-day state, not an append log -
     unlike calibration_log.jsonl/daily_performance.jsonl, this needs to
     flip a "sent" flag after firing), so a process restart or a
     duplicate check within the tolerance window can't double-send.
 
-Scheduling the actual one-shot fire (i.e. "wake up and call check_and_send
-at exactly this timestamp") isn't something this plain Python module can
-do by itself - only the agent session can create a Routine. See
-build_dashboard.py's integration and the hourly Routine's prompt for how
-the lock-in step signals that a new one-shot fire needs to be scheduled.
+Scheduling the actual one-shot fires (i.e. "wake up and call
+check_and_send at exactly this timestamp") isn't something this plain
+Python module can do by itself - only the agent session can create a
+Routine. See build_dashboard.py's integration and the hourly Routine's
+prompt for how the lock-in step signals that new one-shot fires need to
+be scheduled (one per checkpoint - the marker format is unchanged from
+the single-fire version, just emitted multiple times per side).
 
 Config (never commit real values - see .env.example):
     ALERT_PHONE_NUMBER    10-digit phone number to text, digits only
@@ -63,6 +91,9 @@ from weather_estimator import estimate_daily_extremes, estimate_temp, get_observ
 STATE_PATH = os.path.join(os.path.dirname(__file__), "peak_alerts_state.json")
 STATION = "KSEA"
 LEAD_HOURS = 1
+CUTOFF_MINUTES = 20
+CHECK_INTERVAL_MINUTES = 10
+CONFIDENCE_THRESHOLD_PCT = 58
 TOLERANCE_MINUTES = 5
 
 
@@ -100,22 +131,39 @@ def _save_state(state):
         json.dump(state, f, indent=2)
 
 
+def _checkpoints_between(window_start, hard_cutoff, now):
+    """Timestamps CHECK_INTERVAL_MINUTES apart spanning [window_start,
+    hard_cutoff], excluding any that are already in the past (no point
+    scheduling a fire for a moment that's already gone, e.g. when
+    lock-in itself runs a little late)."""
+    checkpoints = []
+    t = window_start
+    while t < hard_cutoff:
+        checkpoints.append(t)
+        t += timedelta(minutes=CHECK_INTERVAL_MINUTES)
+    checkpoints.append(hard_cutoff)
+    return [t for t in checkpoints if t > now]
+
+
 def get_or_lock_daily_targets(station_id=STATION):
     """
-    Once per extreme, lock in target_alert_time = predicted peak time -
-    1 hour, using whatever the model's estimate is right now. Each side
-    is filed under the calendar date its OWN prediction is actually for
-    (predicted_peak_time.date()), not the date lock-in happens to run on -
-    this matters for "low", which flips to forecasting the *next* day's
-    dawn (status "tonight") once today's own low has passed. Filing it
-    under the date it's locked would double-lock it again from that next
-    day's own morning, when the model naturally starts a fresh "today"
-    prediction for the same physical low.
+    Once per extreme, lock in an alert WINDOW - window_start (predicted
+    peak time - LEAD_HOURS) through hard_cutoff (predicted peak time -
+    CUTOFF_MINUTES) - using whatever the model's estimate is right now.
+    Each side is filed under the calendar date its OWN prediction is
+    actually for (predicted_peak_time.date()), not the date lock-in
+    happens to run on - this matters for "low", which flips to
+    forecasting the *next* day's dawn (status "tonight") once today's
+    own low has passed. Filing it under the date it's locked would
+    double-lock it again from that next day's own morning, when the
+    model naturally starts a fresh "today" prediction for the same
+    physical low.
 
     Returns {"newly_locked": [(date_str, side), ...], "state": {...}} -
-    newly_locked entries are what the caller needs to schedule a one-shot
-    fire for (see module docstring); "state" holds only the touched
-    dates' records, formatted for the CLI to print.
+    newly_locked entries are what the caller needs to schedule one-shot
+    fires for, one per checkpoint in that side's state entry (see module
+    docstring); "state" holds only the touched dates' records, formatted
+    for the CLI to print.
     """
     extremes = estimate_daily_extremes(station_id)
     now = extremes["as_of"]
@@ -132,18 +180,22 @@ def get_or_lock_daily_targets(station_id=STATION):
         if side in day_state:
             continue
 
-        target_alert_time = predicted_peak_time - timedelta(hours=LEAD_HOURS)
+        window_start = predicted_peak_time - timedelta(hours=LEAD_HOURS)
+        hard_cutoff = predicted_peak_time - timedelta(minutes=CUTOFF_MINUTES)
         day_state[side] = {
             "predicted_peak_time_at_lock": predicted_peak_time.isoformat(),
-            "target_alert_time": target_alert_time.isoformat(),
+            "window_start": window_start.isoformat(),
+            "hard_cutoff": hard_cutoff.isoformat(),
+            "checkpoints": [t.isoformat() for t in _checkpoints_between(window_start, hard_cutoff, now)],
             "locked_at": now.isoformat(),
             "sent": False,
             "sent_at": None,
             "message": None,
-            # If the lead-time window is already behind us by the moment
-            # we locked in (e.g. lock-in ran late), there's nothing
+            "confidence_at_send": None,
+            # If the whole window is already behind us by the moment we
+            # locked in (e.g. lock-in ran late), there's nothing
             # meaningful left to schedule - don't invent a past fire time.
-            "skipped_missed_window": target_alert_time <= now,
+            "skipped_missed_window": hard_cutoff <= now,
         }
         newly_locked.append((target_date_str, side))
 
@@ -154,8 +206,15 @@ def get_or_lock_daily_targets(station_id=STATION):
     }
 
 
-def _format_message(station_id, side, extremes):
-    est = estimate_temp(station_id, hours_ahead=3)
+def _trend_confidence_pct(est):
+    """Same formula build_dashboard.py uses for the dashboard's own
+    "confidence" figure - proximity to sunrise/peak turning points and
+    current cloud/wind - so the text and the dashboard never disagree
+    about how sure the model is."""
+    return round(est["diurnal_damping"] * est["sky_wind_damping"] * 100)
+
+
+def _format_message(station_id, side, extremes, est, trend_confidence_pct):
     now = extremes["as_of"]
 
     if side == "high":
@@ -166,12 +225,11 @@ def _format_message(station_id, side, extremes):
         label = "low"
 
     lo, hi = est["estimated_range_f"]
-    damping_pct = round(est["diurnal_damping"] * est["sky_wind_damping"] * 100)
 
     return (
         f"{station_id}: Est. {label} {peak_temp:.0f}°F ~{peak_time.strftime('%-I:%M%p').lower()} "
         f"(currently {est['current_temp_f']:.0f}°F, {now.strftime('%-I:%M%p').lower()}).\n"
-        f"Trend: {est['raw_trend_f_per_hr']:+.1f}°/hr, damped {damping_pct}%. Band: {lo:.0f}-{hi:.0f}°F."
+        f"Trend confidence: {trend_confidence_pct}%. Band: {lo:.0f}-{hi:.0f}°F."
     )
 
 
@@ -194,15 +252,29 @@ def send_text(message):
     return r.json()
 
 
+def _legacy_or(side_state, key, fallback_key="target_alert_time"):
+    """peak_alerts_state.json may still hold entries locked before the
+    window/confidence-gating refactor (a single target_alert_time
+    instead of window_start/hard_cutoff). Fall back to that single
+    instant for both bounds so an in-flight legacy entry keeps behaving
+    exactly like it did before - fire once, right at that instant -
+    rather than erroring out or silently changing behavior mid-flight."""
+    return side_state.get(key, side_state.get(fallback_key))
+
+
 def check_and_send(station_id=STATION, side="high", tolerance_minutes=TOLERANCE_MINUTES):
     """
     Re-checks the model's CURRENT estimate (not the value cached at lock
-    time) and sends the text if we're within tolerance_minutes of the
-    locked target and haven't already sent for this extreme.
+    time) and sends the text once we're inside the locked alert window
+    AND either trend_confidence clears CONFIDENCE_THRESHOLD_PCT or
+    we've reached hard_cutoff - whichever comes first - and haven't
+    already sent for this extreme. Safe to call repeatedly (e.g. once
+    per checkpoint): every call after the first "yes" is a no-op because
+    of the "sent" flag.
 
     Looks up the locked record by scanning yesterday/today/tomorrow
     rather than assuming an exact date-key match, and picks whichever
-    candidate's target_alert_time is closest to now - robust to "low"
+    candidate's hard_cutoff is closest to now - robust to "low"
     sometimes being filed under the next calendar date relative to when
     it was locked (see get_or_lock_daily_targets).
     """
@@ -222,28 +294,46 @@ def check_and_send(station_id=STATION, side="high", tolerance_minutes=TOLERANCE_
 
     date_str, side_state = min(
         candidates,
-        key=lambda ds: abs((now - datetime.fromisoformat(ds[1]["target_alert_time"])).total_seconds()),
+        key=lambda ds: abs((now - datetime.fromisoformat(_legacy_or(ds[1], "hard_cutoff"))).total_seconds()),
     )
 
     if side_state["sent"]:
         return {"sent": False, "reason": "already sent for this extreme"}
     if side_state.get("skipped_missed_window"):
-        return {"sent": False, "reason": "target window was already past at lock time"}
+        return {"sent": False, "reason": "alert window was already past at lock time"}
 
-    target_time = datetime.fromisoformat(side_state["target_alert_time"])
-    delta_minutes = abs((now - target_time).total_seconds()) / 60
-    if delta_minutes > tolerance_minutes:
-        return {"sent": False, "reason": f"outside tolerance window ({delta_minutes:.1f} min from target)"}
+    window_start = datetime.fromisoformat(_legacy_or(side_state, "window_start"))
+    hard_cutoff = datetime.fromisoformat(_legacy_or(side_state, "hard_cutoff"))
 
-    message = _format_message(station_id, side, extremes)
+    if now < window_start - timedelta(minutes=tolerance_minutes):
+        early_minutes = (window_start - now).total_seconds() / 60
+        return {"sent": False, "reason": f"before alert window opens ({early_minutes:.0f} min early)"}
+
+    est = estimate_temp(station_id, hours_ahead=3)
+    trend_confidence_pct = _trend_confidence_pct(est)
+    past_cutoff = now >= hard_cutoff - timedelta(minutes=tolerance_minutes)
+    confident_enough = trend_confidence_pct >= CONFIDENCE_THRESHOLD_PCT
+
+    if not (confident_enough or past_cutoff):
+        cutoff_minutes = (hard_cutoff - now).total_seconds() / 60
+        return {
+            "sent": False,
+            "reason": (
+                f"trend confidence {trend_confidence_pct}% below {CONFIDENCE_THRESHOLD_PCT}% threshold "
+                f"and {cutoff_minutes:.0f} min before hard cutoff - waiting for next checkpoint"
+            ),
+        }
+
+    message = _format_message(station_id, side, extremes, est, trend_confidence_pct)
     send_text(message)
 
     side_state["sent"] = True
     side_state["sent_at"] = now.isoformat()
     side_state["message"] = message
+    side_state["confidence_at_send"] = trend_confidence_pct
     state[date_str][side] = side_state
     _save_state(state)
-    return {"sent": True, "message": message}
+    return {"sent": True, "message": message, "trend_confidence_pct": trend_confidence_pct}
 
 
 if __name__ == "__main__":
@@ -255,7 +345,8 @@ if __name__ == "__main__":
         for date_str, side in result["newly_locked"]:
             side_state = result["state"][date_str][side]
             if not side_state["skipped_missed_window"]:
-                print(f"ALERT_SCHEDULE_NEEDED side={side} date={date_str} target_alert_time={side_state['target_alert_time']}")
+                for checkpoint in side_state["checkpoints"]:
+                    print(f"ALERT_SCHEDULE_NEEDED side={side} date={date_str} target_alert_time={checkpoint}")
     elif cmd == "check":
         side = sys.argv[2] if len(sys.argv) > 2 else "high"
         print(json.dumps(check_and_send(STATION, side), indent=2))

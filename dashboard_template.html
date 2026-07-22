@@ -413,6 +413,12 @@
   .perf-subtle { color: var(--text-faint); font-size: 10px; }
   .perf-nodata { color: var(--text-faint); font-style: italic; }
   .perf-flag { cursor: help; }
+  .perf-flag-caption {
+    font-size: 11px;
+    color: var(--text-faint);
+    margin-top: 8px;
+    line-height: 1.5;
+  }
 
   .footer {
     font-size: 12px;
@@ -651,7 +657,7 @@
       {{monthly_high_stats}}
       <div class="module-label" style="margin-top: 16px;">Low</div>
       {{monthly_low_stats}}
-      <div class="hint">Bias/MAE follow the same naming as the backtest, but signed as (actual − predicted) - the opposite sign from the backtest's error convention. Positive bias here means the actual value/time came in later or higher than predicted.</div>
+      <div class="hint">Bias/MAE use the same (predicted − actual) sign convention as the backtest above. Positive bias means the model's prediction ran warm/high or late; negative means it ran cool/low or early.</div>
     </div>
 
     <div class="glass">
