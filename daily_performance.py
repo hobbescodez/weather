@@ -37,6 +37,7 @@ from kalshi import (
     get_market_brackets,
     bracket_contains,
 )
+from paper_trading import resolve_paper_trade
 import requests
 
 LOG_PATH = os.path.join(os.path.dirname(__file__), "daily_performance.jsonl")
@@ -270,7 +271,27 @@ def _finalize_side(station_id, day, side, actuals, prediction, series_ticker, tz
         "kalshi_implied_at_prediction_value": None,
         "kalshi_implied_at_prediction_probability": None,
         "predicted_within_kalshi_implied_bracket": None,
+        # Paper trade (simulated only, no real order): None if no bet was
+        # placed that day/side (e.g. no edge cleared MIN_EDGE), otherwise
+        # resolve_paper_trade's output merged in directly.
+        "simulated_bucket_chosen": None,
+        "simulated_entry_price": None,
+        "simulated_stake": None,
+        "model_implied_probability": None,
+        "market_implied_probability": None,
+        "outcome_bucket": None,
+        "simulated_payout": None,
     }
+
+    resolved_bet = resolve_paper_trade(day.isoformat(), side, actual_temp)
+    if resolved_bet is not None:
+        record["simulated_bucket_chosen"] = resolved_bet["simulated_bucket_chosen"]
+        record["simulated_entry_price"] = resolved_bet["simulated_entry_price"]
+        record["simulated_stake"] = resolved_bet["simulated_stake"]
+        record["model_implied_probability"] = resolved_bet["model_implied_probability"]
+        record["market_implied_probability"] = resolved_bet["market_implied_probability"]
+        record["outcome_bucket"] = resolved_bet["outcome_bucket"]
+        record["simulated_payout"] = resolved_bet["simulated_payout"]
 
     try:
         event_ticker = get_event_ticker_for_any_date(series_ticker, day)
@@ -385,10 +406,12 @@ def weekly_table(station_id, days=7):
         d = (today_local - timedelta(days=i)).isoformat()
         rows.append(records_by_date.get(d, {"date": d, "high": None, "low": None}))
 
+    finalized_rows = [r for r in rows if r.get("high") is not None or r.get("low") is not None]
     return {
         "days_requested": days,
-        "days_with_data": sum(1 for r in rows if r.get("high") is not None or r.get("low") is not None),
+        "days_with_data": len(finalized_rows),
         "rows": rows,
+        "paper_trading": _paper_trading_stats(finalized_rows),
     }
 
 
@@ -398,6 +421,59 @@ def _mean(xs):
 
 def _mean_abs(xs):
     return round(sum(abs(x) for x in xs) / len(xs), 2) if xs else None
+
+
+def _paper_trading_stats(records):
+    """
+    Aggregates simulated bets across a set of finalized-day records (both
+    sides). total_pnl/win_rate answer "would this have made money"; the
+    model-vs-market comparison answers the actual question this feature
+    exists to test - on the days the model's and Kalshi's probabilities
+    disagreed most, which one ended up closer to the real outcome?
+    """
+    bets = []
+    for r in records:
+        for side in ("high", "low"):
+            rec = r.get(side)
+            if rec is None or rec.get("simulated_payout") is None:
+                continue
+            bets.append({
+                "date": r["date"], "side": side,
+                "payout": rec["simulated_payout"],
+                "hit": rec["hit"],
+                "model_p": rec["model_implied_probability"],
+                "market_p": rec["market_implied_probability"],
+            })
+
+    if not bets:
+        return {"n_bets": 0, "total_pnl": None, "win_rate": None, "model_vs_market": None}
+
+    total_pnl = round(sum(b["payout"] for b in bets), 2)
+    win_rate = round(sum(1 for b in bets if b["hit"]) / len(bets), 3)
+
+    for b in bets:
+        truth = 1.0 if b["hit"] else 0.0
+        b["model_dist"] = abs(b["model_p"] - truth)
+        b["market_dist"] = abs(b["market_p"] - truth)
+        b["disagreement"] = abs(b["model_p"] - b["market_p"])
+
+    # The more-disagreeing half of bets - whoever's probability ended up
+    # closer to the actual outcome on THOSE days "won" that comparison.
+    ranked = sorted(bets, key=lambda b: b["disagreement"], reverse=True)
+    top_n = ranked[:max(1, len(ranked) // 2)]
+    model_closer = sum(1 for b in top_n if b["model_dist"] < b["market_dist"])
+    market_closer = sum(1 for b in top_n if b["market_dist"] < b["model_dist"])
+
+    return {
+        "n_bets": len(bets),
+        "total_pnl": total_pnl,
+        "win_rate": win_rate,
+        "model_vs_market": {
+            "n_high_disagreement_bets": len(top_n),
+            "model_closer_count": model_closer,
+            "market_closer_count": market_closer,
+        },
+    }
 
 
 def _side_month_stats(records, side):
@@ -437,6 +513,7 @@ def monthly_rollup(station_id, year, month):
         "low_sample": len(records) < 5,
         "high": _side_month_stats(records, "high"),
         "low": _side_month_stats(records, "low"),
+        "paper_trading": _paper_trading_stats(records),
     }
 
 

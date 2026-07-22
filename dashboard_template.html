@@ -655,6 +655,17 @@
     </div>
 
     <div class="glass">
+      <div class="module-label">Paper trading · trailing 7 days</div>
+      {{weekly_paper_trading}}
+      <div class="hint">Simulated only - no real orders placed. A bet is logged when the model's own (backtest-calibrated) probability disagrees with Kalshi's price by at least 15 points, close to the actual peak time.</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Paper trading · {{monthly_label}}</div>
+      {{monthly_paper_trading}}
+    </div>
+
+    <div class="glass">
       <div class="module-label">Conditions</div>
       <div class="stats">
         <div class="stat">

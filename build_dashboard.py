@@ -233,6 +233,31 @@ def build_monthly_stats_rows(stats):
     return "\n".join(rows)
 
 
+def build_paper_trading_rows(stats):
+    """Simulated only - no real orders. total_pnl/win_rate answer "would
+    this have made money"; model_vs_market answers the actual question
+    the feature exists to test: on the days the model and Kalshi
+    disagreed most, which one ended up closer to right?"""
+    if stats["n_bets"] == 0:
+        return '<div class="hint">No simulated bets placed yet in this window.</div>'
+
+    def row(label, value):
+        return f'<div class="range-row"><span class="range-label">{label}</span><span class="range-values">{value}</span></div>'
+
+    rows = [
+        row("Simulated P&L", f"{'+' if stats['total_pnl'] >= 0 else ''}${stats['total_pnl']:.2f}"),
+        row("Win rate", f"{stats['win_rate'] * 100:.0f}% ({stats['n_bets']} bets)"),
+    ]
+    mvm = stats["model_vs_market"]
+    if mvm is not None:
+        rows.append(
+            f'<div class="hint">On the {mvm["n_high_disagreement_bets"]} bet(s) where the model and Kalshi '
+            f'disagreed most: model was closer to the actual outcome {mvm["model_closer_count"]} time(s), '
+            f'market was closer {mvm["market_closer_count"]} time(s).</div>'
+        )
+    return "\n".join(rows)
+
+
 
 
 THIN_VOLUME_THRESHOLD = 5  # contracts traded - below this, last_price is easy to be stale/unreliable
@@ -514,6 +539,8 @@ def main():
         ),
         "monthly_high_stats": build_monthly_stats_rows(monthly_perf["high"]),
         "monthly_low_stats": build_monthly_stats_rows(monthly_perf["low"]),
+        "weekly_paper_trading": build_paper_trading_rows(weekly_perf["paper_trading"]),
+        "monthly_paper_trading": build_paper_trading_rows(monthly_perf["paper_trading"]),
         "sky_class": sky_class,
         "condition_text": condition_text,
         "obs_json_url": obs_json_url,
