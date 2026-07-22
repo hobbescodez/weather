@@ -620,10 +620,11 @@
           <div class="value"><span class="chip {{pressure_class}}">{{pressure_label}}</span></div>
         </div>
         <div class="stat">
-          <div class="label">Confidence</div>
+          <div class="label">Trend confidence</div>
           <div class="value">{{confidence_pct}}%</div>
         </div>
       </div>
+      <div class="hint">Trend confidence is how much the model trusts its own short-term extrapolation right now - not confidence in the readings above. It's deliberately low near sunrise or the day's peak-heat hour, since the trend is about to reverse there regardless of how strong it looks right before.</div>
     </div>
 
     <div>
