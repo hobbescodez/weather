@@ -16,6 +16,7 @@ from weather_estimator import (
     get_sun_times,
 )
 from kalshi import HIGH_SERIES, LOW_SERIES, get_market_for_date
+from calibration_log import record_snapshot
 
 STATION = "KSEA"
 HOURS_AHEAD = 3
@@ -202,6 +203,8 @@ def main():
     est = estimate_temp(STATION, hours_ahead=HOURS_AHEAD)
     extremes = estimate_daily_extremes(STATION)
     lat, lon, _ = get_station_location(STATION)
+
+    record_snapshot(extremes)
 
     today = date.today()
     tomorrow = today + timedelta(days=1)
