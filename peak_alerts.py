@@ -3,12 +3,17 @@ Sends a text ~1 hour before the model's estimated daily high/low, so
 there's a heads-up close to the actual turning point rather than a
 generic morning forecast.
 
-Delivery: HTTPS POST to Resend's email API (https://resend.com), sending
-to the phone's carrier email-to-SMS gateway (e.g. number@tmomail.net).
-Raw SMTP (smtplib, ports 587/465) does NOT work from this sandbox -
-confirmed by direct connection tests: only HTTPS egress is proxied here,
-nothing else. An HTTP-based email API is the only way to reach an SMTP
-gateway address at all from this environment.
+Delivery: Twilio's SMS REST API (https://api.twilio.com). Two earlier
+approaches were tried and ruled out first:
+  - Raw SMTP (smtplib, ports 587/465) does NOT work from this sandbox -
+    confirmed by direct connection tests: only HTTPS egress is proxied.
+  - Resend's email API (HTTPS, so it *can* reach this sandbox) was tried
+    next, sending to the phone's carrier email-to-SMS gateway - but
+    Resend's unverified/free tier only allows sending to the account's
+    own registered email address, not to arbitrary third-party
+    recipients like a carrier gateway, without first verifying a domain.
+Twilio sends directly to the phone number over SMS - no email gateway,
+no domain-verification requirement, small per-message cost.
 
 Trigger logic (see get_or_lock_daily_targets / check_and_send):
   - Once per day per extreme (high, low), the target alert time
@@ -33,12 +38,11 @@ build_dashboard.py's integration and the hourly Routine's prompt for how
 the lock-in step signals that a new one-shot fire needs to be scheduled.
 
 Config (never commit real values - see .env.example):
-    ALERT_PHONE_NUMBER    10-digit phone number, digits only
-    ALERT_CARRIER_GATEWAY carrier's email-to-SMS domain (e.g. tmomail.net)
-    RESEND_API_KEY        Resend API key
-    ALERT_FROM_EMAIL      From address (onboarding@resend.dev works with
-                           zero setup on a fresh Resend account; a domain
-                           you've verified with Resend works too)
+    ALERT_PHONE_NUMBER    10-digit phone number to text, digits only
+    TWILIO_ACCOUNT_SID    from the Twilio console
+    TWILIO_AUTH_TOKEN     from the Twilio console
+    TWILIO_FROM_NUMBER    the Twilio phone number sending the text
+                          (E.164, e.g. +15551234567)
 
 CLI:
     python3 peak_alerts.py lock            # lock in today's targets
@@ -79,9 +83,9 @@ def _load_env():
 _load_env()
 
 PHONE_NUMBER = os.environ.get("ALERT_PHONE_NUMBER", "")
-CARRIER_GATEWAY = os.environ.get("ALERT_CARRIER_GATEWAY", "")
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
-ALERT_FROM_EMAIL = os.environ.get("ALERT_FROM_EMAIL", "onboarding@resend.dev")
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
+TWILIO_FROM_NUMBER = os.environ.get("TWILIO_FROM_NUMBER", "")
 
 
 def _load_state():
@@ -172,18 +176,18 @@ def _format_message(station_id, side, extremes):
 
 
 def send_text(message):
-    """POSTs to Resend's HTTPS API - see module docstring for why this
-    isn't plain smtplib."""
-    if not RESEND_API_KEY:
-        raise RuntimeError("RESEND_API_KEY is not set - fill in .env before sending")
-    if not PHONE_NUMBER or not CARRIER_GATEWAY:
-        raise RuntimeError("ALERT_PHONE_NUMBER / ALERT_CARRIER_GATEWAY not set in .env")
+    """POSTs to Twilio's SMS REST API - see module docstring for why
+    this isn't smtplib or an email-to-SMS gateway."""
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_FROM_NUMBER:
+        raise RuntimeError("TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM_NUMBER not set - fill in .env before sending")
+    if not PHONE_NUMBER:
+        raise RuntimeError("ALERT_PHONE_NUMBER not set in .env")
 
-    to_address = f"{PHONE_NUMBER}@{CARRIER_GATEWAY}"
+    to_number = f"+1{PHONE_NUMBER}" if not PHONE_NUMBER.startswith("+") else PHONE_NUMBER
     r = requests.post(
-        "https://api.resend.com/emails",
-        headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
-        json={"from": ALERT_FROM_EMAIL, "to": [to_address], "subject": "", "text": message},
+        f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json",
+        auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+        data={"To": to_number, "From": TWILIO_FROM_NUMBER, "Body": message},
         timeout=15,
     )
     r.raise_for_status()
