@@ -292,6 +292,17 @@ def main():
         print(f"Kalshi tomorrow low market fetch failed: {e}")
         kalshi_tomorrow_low = None
 
+    try:
+        tomorrow_high_volume = get_event_hourly_volume(HIGH_SERIES, kalshi_tomorrow_high["brackets"], hours=24) if kalshi_tomorrow_high else None
+    except Exception as e:
+        print(f"Kalshi tomorrow high volume fetch failed: {e}")
+        tomorrow_high_volume = None
+    try:
+        tomorrow_low_volume = get_event_hourly_volume(LOW_SERIES, kalshi_tomorrow_low["brackets"], hours=24) if kalshi_tomorrow_low else None
+    except Exception as e:
+        print(f"Kalshi tomorrow low volume fetch failed: {e}")
+        tomorrow_low_volume = None
+
     window_start = now - timedelta(hours=SPARKLINE_HOURS)
     hist = get_observation_history(STATION, start=window_start, end=now)
 
@@ -400,6 +411,12 @@ def main():
         "low_volume_total": f"{low_volume['total_contracts']:,.0f}" if low_volume else "—",
         "low_volume_dollars_est": f"≈${low_volume['total_dollars']:,.0f} est." if low_volume else "—",
         "low_volume_svg": build_volume_bars_svg(low_volume["hourly"], now.tzinfo) if low_volume else '<div class="hint">Volume unavailable.</div>',
+        "tomorrow_high_volume_total": f"{tomorrow_high_volume['total_contracts']:,.0f}" if tomorrow_high_volume else "—",
+        "tomorrow_high_volume_dollars_est": f"≈${tomorrow_high_volume['total_dollars']:,.0f} est." if tomorrow_high_volume else "—",
+        "tomorrow_high_volume_svg": build_volume_bars_svg(tomorrow_high_volume["hourly"], now.tzinfo) if tomorrow_high_volume else '<div class="hint">Volume unavailable.</div>',
+        "tomorrow_low_volume_total": f"{tomorrow_low_volume['total_contracts']:,.0f}" if tomorrow_low_volume else "—",
+        "tomorrow_low_volume_dollars_est": f"≈${tomorrow_low_volume['total_dollars']:,.0f} est." if tomorrow_low_volume else "—",
+        "tomorrow_low_volume_svg": build_volume_bars_svg(tomorrow_low_volume["hourly"], now.tzinfo) if tomorrow_low_volume else '<div class="hint">Volume unavailable.</div>',
         "sky_class": sky_class,
         "condition_text": condition_text,
         "obs_json_url": obs_json_url,

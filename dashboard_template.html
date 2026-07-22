@@ -567,10 +567,38 @@
     </div>
 
     <div class="glass">
+      <div class="module-label">Kalshi · tomorrow's high market volume</div>
+      <div class="estimate-row">
+        <span class="estimate-value">{{tomorrow_high_volume_total}}</span>
+        <span class="estimate-label">contracts traded, last 24h</span>
+      </div>
+      <div class="range-row">
+        <span class="range-label">Dollar volume (our estimate)</span>
+        <span class="range-values">{{tomorrow_high_volume_dollars_est}}</span>
+      </div>
+      {{tomorrow_high_volume_svg}}
+      <div class="hint">Contract count matches Kalshi's own "Volume" figure. The dollar amount is our own estimate (contracts × that hour's average price) since Kalshi doesn't publish a dollar total directly.</div>
+    </div>
+
+    <div class="glass">
       <div class="module-label">Kalshi · tomorrow's low market</div>
       {{kalshi_tomorrow_low_rows}}
       <div class="hint">Highlighted bracket is the one this tool's tomorrow-low estimate falls into.</div>
       <div class="kalshi-ticker">{{kalshi_tomorrow_low_ticker}}</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Kalshi · tomorrow's low market volume</div>
+      <div class="estimate-row">
+        <span class="estimate-value">{{tomorrow_low_volume_total}}</span>
+        <span class="estimate-label">contracts traded, last 24h</span>
+      </div>
+      <div class="range-row">
+        <span class="range-label">Dollar volume (our estimate)</span>
+        <span class="range-values">{{tomorrow_low_volume_dollars_est}}</span>
+      </div>
+      {{tomorrow_low_volume_svg}}
+      <div class="hint">Contract count matches Kalshi's own "Volume" figure. The dollar amount is our own estimate (contracts × that hour's average price) since Kalshi doesn't publish a dollar total directly.</div>
     </div>
 
     <div class="glass">
