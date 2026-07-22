@@ -19,8 +19,9 @@ from weather_estimator import (
 )
 from kalshi import HIGH_SERIES, LOW_SERIES, get_market_for_date, get_event_hourly_volume, bracket_contains
 from calibration_log import record_snapshot, next_day_confidence_pct, MIN_NEXT_DAY_SAMPLES
-from daily_performance import finalize_pending_days, weekly_table, monthly_rollup
+from daily_performance import finalize_pending_days, weekly_table, monthly_rollup, LOW_SAMPLE_THRESHOLD
 from peak_alerts import get_or_lock_daily_targets
+from paper_trading import get_or_lock_2hr_targets, LEAD_TIME_HINTS
 
 STATION = "KSEA"
 HOURS_AHEAD = 3
@@ -36,7 +37,11 @@ def _fmt_day_time(ts):
 
 
 def build_sparkline_svg(times, temps, est_time, est_temp, width=640, height=160):
-    pad_x, pad_top, pad_bottom = 8, 16, 28
+    # pad_top leaves room for the estimate label sitting above its dot -
+    # that dot marks the projection time, which is easy to lose track of
+    # against the plain trend line, so it gets a halo + outline + a printed
+    # value instead of just a small solid circle (see spark-est-* CSS).
+    pad_x, pad_top, pad_bottom = 8, 30, 28
     all_temps = temps + [est_temp]
     lo, hi = min(all_temps), max(all_temps)
     span = max(hi - lo, 1)
@@ -64,14 +69,18 @@ def build_sparkline_svg(times, temps, est_time, est_temp, width=640, height=160)
     proj_path = f"M {pts[-1][0]:.1f},{pts[-1][1]:.1f} L {est_pt[0]:.1f},{est_pt[1]:.1f}"
 
     now_x = pts[-1][0]
+    est_label_y = max(est_pt[1] - 14, 12)
 
     return f"""
 <svg viewBox="0 0 {width} {height}" class="sparkline" preserveAspectRatio="none" role="img" aria-label="Temperature trend, last {SPARKLINE_HOURS} hours and projected estimate">
   <path d="{area_path}" class="spark-area" />
   <path d="{line_path}" class="spark-line" />
   <path d="{proj_path}" class="spark-proj" />
+  <line x1="{est_pt[0]:.1f}" y1="{est_pt[1]:.1f}" x2="{est_pt[0]:.1f}" y2="{height - pad_bottom:.1f}" class="spark-est-guide" />
   <circle cx="{now_x:.1f}" cy="{pts[-1][1]:.1f}" r="3.5" class="spark-now-dot" />
-  <circle cx="{est_pt[0]:.1f}" cy="{est_pt[1]:.1f}" r="4.5" class="spark-est-dot" />
+  <circle cx="{est_pt[0]:.1f}" cy="{est_pt[1]:.1f}" r="9" class="spark-est-dot-halo" />
+  <circle cx="{est_pt[0]:.1f}" cy="{est_pt[1]:.1f}" r="5.5" class="spark-est-dot" />
+  <text x="{est_pt[0]:.1f}" y="{est_label_y:.1f}" text-anchor="end" class="spark-est-label">{est_temp:.0f}°</text>
 </svg>
 """.strip()
 
@@ -265,29 +274,62 @@ def build_monthly_stats_rows(stats):
     return "\n".join(rows)
 
 
-def build_paper_trading_rows(stats):
-    """Simulated only - no real orders. total_pnl/win_rate answer "would
-    this have made money"; model_vs_market answers the actual question
-    the feature exists to test: on the days the model and Kalshi
-    disagreed most, which one ended up closer to right?"""
-    if stats["n_bets"] == 0:
-        return '<div class="hint">No simulated bets placed yet in this window.</div>'
+LEAD_TIME_LABELS = {"1hr": "1hr before peak", "2hr": "2hr before peak"}
 
+
+def build_paper_trading_rows(stats_by_lead_time):
+    """
+    stats_by_lead_time: {"1hr": {...}, "2hr": {...}} from daily_performance.
+    _paper_trading_stats. Rendered as two independent blocks - NEVER
+    averaged/combined into one set of numbers, since the whole point of
+    running both lead times in parallel is comparing them against each
+    other (see paper_trading.py's module docstring); collapsing them here
+    would quietly erase the comparison the feature exists to make. A
+    block with fewer than LOW_SAMPLE_THRESHOLD bets shows "insufficient
+    data" instead of a percentage/comparison that thin would misrepresent
+    as meaningful - same guard monthly_rollup already uses for low_sample.
+    """
     def row(label, value):
         return f'<div class="range-row"><span class="range-label">{label}</span><span class="range-values">{value}</span></div>'
 
-    rows = [
-        row("Simulated P&L", f"{'+' if stats['total_pnl'] >= 0 else ''}${stats['total_pnl']:.2f}"),
-        row("Win rate", f"{stats['win_rate'] * 100:.0f}% ({stats['n_bets']} bets)"),
-    ]
-    mvm = stats["model_vs_market"]
-    if mvm is not None:
-        rows.append(
-            f'<div class="hint">On the {mvm["n_high_disagreement_bets"]} bet(s) where the model and Kalshi '
-            f'disagreed most: model was closer to the actual outcome {mvm["model_closer_count"]} time(s), '
-            f'market was closer {mvm["market_closer_count"]} time(s).</div>'
-        )
-    return "\n".join(rows)
+    blocks = []
+    for i, lt in enumerate(LEAD_TIME_HINTS):
+        stats = stats_by_lead_time[lt]
+        label_style = "" if i == 0 else " style=\"margin-top: 16px;\""
+        header = f'<div class="module-label"{label_style}>{LEAD_TIME_LABELS[lt]}</div>'
+
+        if stats["n_bets"] == 0:
+            blocks.append(header + '<div class="hint">No simulated bets placed yet in this window.</div>')
+            continue
+
+        if stats["low_sample"]:
+            blocks.append(
+                header
+                + f'<div class="hint">Insufficient data - only {stats["n_bets"]} bet(s) so far '
+                f'(need at least {LOW_SAMPLE_THRESHOLD} to treat win rate/band coverage as meaningful).</div>'
+            )
+            continue
+
+        rows = [
+            row("Simulated P&L", f"{'+' if stats['total_pnl'] >= 0 else ''}${stats['total_pnl']:.2f}"),
+            row("Win rate", f"{stats['win_rate'] * 100:.0f}% ({stats['n_bets']} bets)"),
+        ]
+        if stats["avg_edge_at_entry"] is not None:
+            rows.append(row("Avg. edge at entry", f"{stats['avg_edge_at_entry'] * 100:.0f} pts"))
+        if stats["pct_within_uncertainty_band"] is not None:
+            rows.append(row("Within stated uncertainty band", f"{stats['pct_within_uncertainty_band'] * 100:.0f}%"))
+
+        block_html = header + "\n".join(rows)
+        mvm = stats["model_vs_market"]
+        if mvm is not None:
+            block_html += (
+                f'<div class="hint">On the {mvm["n_high_disagreement_bets"]} bet(s) where the model and Kalshi '
+                f'disagreed most: model was closer to the actual outcome {mvm["model_closer_count"]} time(s), '
+                f'market was closer {mvm["market_closer_count"]} time(s).</div>'
+            )
+        blocks.append(block_html)
+
+    return "\n".join(blocks)
 
 
 
@@ -418,6 +460,15 @@ def main():
                     print(f"ALERT_SCHEDULE_NEEDED side={side} date={date_str} target_alert_time={checkpoint}")
     except Exception as e:
         print(f"peak_alerts: get_or_lock_daily_targets failed: {e}")
+
+    try:
+        lock_2hr_result = get_or_lock_2hr_targets(STATION)
+        for date_str, side in lock_2hr_result["newly_locked"]:
+            side_state = lock_2hr_result["state"][date_str][side]
+            if not side_state["skipped_missed_window"]:
+                print(f"PAPER_TRADE_2HR_SCHEDULE_NEEDED side={side} date={date_str} target_time={side_state['target_time']}")
+    except Exception as e:
+        print(f"paper_trading: get_or_lock_2hr_targets failed: {e}")
 
     weekly_perf = weekly_table(STATION, days=7)
     monthly_perf = monthly_rollup(STATION, now.year, now.month)

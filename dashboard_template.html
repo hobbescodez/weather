@@ -217,7 +217,10 @@
   .spark-line { fill: none; stroke: rgba(255, 255, 255, 0.85); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
   .spark-proj { fill: none; stroke: var(--accent-warm); stroke-width: 2.5; stroke-linecap: round; stroke-dasharray: 1 7; }
   .spark-now-dot { fill: rgba(20, 30, 50, 0.4); stroke: #fff; stroke-width: 2; }
-  .spark-est-dot { fill: var(--accent-warm); }
+  .spark-est-dot-halo { fill: var(--accent-warm); opacity: 0.28; }
+  .spark-est-dot { fill: var(--accent-warm); stroke: #fff; stroke-width: 2; }
+  .spark-est-guide { stroke: var(--accent-warm); stroke-width: 1; stroke-dasharray: 2 3; opacity: 0.5; }
+  .spark-est-label { fill: var(--accent-warm); font-size: 13px; font-weight: 700; }
 
   .spark-caption {
     display: flex;
@@ -225,6 +228,11 @@
     font-size: 11.5px;
     color: var(--text-faint);
     margin-top: 6px;
+  }
+  .spark-caption-target {
+    font-weight: 700;
+    color: var(--accent-warm);
+    font-size: 12.5px;
   }
 
   .volume-chart { width: 100%; height: auto; display: block; margin-top: 10px; }
@@ -487,7 +495,7 @@
       {{sparkline_svg}}
       <div class="spark-caption">
         <span>{{sparkline_hours}}h ago</span>
-        <span>{{target_time}}</span>
+        <span class="spark-caption-target">{{target_time}}</span>
       </div>
     </div>
 
@@ -664,7 +672,7 @@
     <div class="glass">
       <div class="module-label">Paper trading · trailing 7 days</div>
       {{weekly_paper_trading}}
-      <div class="hint">Simulated only - no real orders placed. A bet is logged when the model's own (backtest-calibrated) probability disagrees with Kalshi's price by at least 15 points, close to the actual peak time.</div>
+      <div class="hint">Simulated only - no real orders placed. A bet is logged when the model's own (backtest-calibrated) probability disagrees with Kalshi's price by at least 15 points - independently at ~1hr and ~2hr before the predicted peak, so the two lead times can be compared rather than picking one upfront. Kept separate on purpose - see the two blocks below.</div>
     </div>
 
     <div class="glass">

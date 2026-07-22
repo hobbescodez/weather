@@ -37,12 +37,17 @@ from kalshi import (
     get_market_brackets,
     bracket_contains,
 )
-from paper_trading import resolve_paper_trade
+from paper_trading import resolve_paper_trade, LEAD_TIME_HINTS
 import requests
 
 LOG_PATH = os.path.join(os.path.dirname(__file__), "daily_performance.jsonl")
 
 VOLUME_BUCKET_MINUTES = 15
+
+# Reused everywhere a rollup needs to flag "too few observations to mean
+# anything" rather than present a number with false confidence - monthly_
+# rollup's own low_sample flag, and now each paper-trading lead time's too.
+LOW_SAMPLE_THRESHOLD = 5
 
 
 def _load_rows():
@@ -271,27 +276,33 @@ def _finalize_side(station_id, day, side, actuals, prediction, series_ticker, tz
         "kalshi_implied_at_prediction_value": None,
         "kalshi_implied_at_prediction_probability": None,
         "predicted_within_kalshi_implied_bracket": None,
-        # Paper trade (simulated only, no real order): None if no bet was
-        # placed that day/side (e.g. no edge cleared MIN_EDGE), otherwise
-        # resolve_paper_trade's output merged in directly.
-        "simulated_bucket_chosen": None,
-        "simulated_entry_price": None,
-        "simulated_stake": None,
-        "model_implied_probability": None,
-        "market_implied_probability": None,
-        "outcome_bucket": None,
-        "simulated_payout": None,
+        # Paper trades (simulated only, no real order), kept SEPARATE per
+        # lead_time_hint - "1hr" and "2hr" are two independent experimental
+        # legs being compared, never averaged/combined (see
+        # paper_trading.py's module docstring). None for a given lead time
+        # means no bet was placed that day/side/lead-time (e.g. no edge
+        # cleared MIN_EDGE at that particular moment); otherwise
+        # resolve_paper_trade's output for that lead time merged in
+        # directly.
+        "paper_trades": {lt: None for lt in LEAD_TIME_HINTS},
     }
 
-    resolved_bet = resolve_paper_trade(day.isoformat(), side, actual_temp)
-    if resolved_bet is not None:
-        record["simulated_bucket_chosen"] = resolved_bet["simulated_bucket_chosen"]
-        record["simulated_entry_price"] = resolved_bet["simulated_entry_price"]
-        record["simulated_stake"] = resolved_bet["simulated_stake"]
-        record["model_implied_probability"] = resolved_bet["model_implied_probability"]
-        record["market_implied_probability"] = resolved_bet["market_implied_probability"]
-        record["outcome_bucket"] = resolved_bet["outcome_bucket"]
-        record["simulated_payout"] = resolved_bet["simulated_payout"]
+    resolved_bets = resolve_paper_trade(day.isoformat(), side, actual_temp)
+    for lead_time_hint, resolved_bet in resolved_bets.items():
+        if resolved_bet is None:
+            continue
+        record["paper_trades"][lead_time_hint] = {
+            "simulated_bucket_chosen": resolved_bet["simulated_bucket_chosen"],
+            "simulated_entry_price": resolved_bet["simulated_entry_price"],
+            "simulated_stake": resolved_bet["simulated_stake"],
+            "model_implied_probability": resolved_bet["model_implied_probability"],
+            "market_implied_probability": resolved_bet["market_implied_probability"],
+            "edge_at_entry": resolved_bet.get("edge_at_entry"),
+            "outcome_bucket": resolved_bet["outcome_bucket"],
+            "hit": resolved_bet["hit"],
+            "simulated_payout": resolved_bet["simulated_payout"],
+            "within_uncertainty_band": resolved_bet.get("within_uncertainty_band"),
+        }
 
     try:
         event_ticker = get_event_ticker_for_any_date(series_ticker, day)
@@ -425,31 +436,66 @@ def _mean_abs(xs):
 
 def _paper_trading_stats(records):
     """
-    Aggregates simulated bets across a set of finalized-day records (both
-    sides). total_pnl/win_rate answer "would this have made money"; the
-    model-vs-market comparison answers the actual question this feature
-    exists to test - on the days the model's and Kalshi's probabilities
-    disagreed most, which one ended up closer to the real outcome?
+    Aggregates simulated bets across a set of finalized-day records, kept
+    SEPARATE per lead_time_hint ("1hr" vs "2hr") - never averaged or
+    combined into one number. That separation is the entire point of
+    running both in parallel (see paper_trading.py's module docstring):
+    whether betting closer to peak or further out actually performs
+    better is meant to be answered by comparing these two blocks against
+    each other, not by blending them into a single stat that erases the
+    comparison. Returns {"1hr": {...}, "2hr": {...}}, each shaped like
+    _paper_trading_stats_for_lead_time's return.
+    """
+    return {lt: _paper_trading_stats_for_lead_time(records, lt) for lt in LEAD_TIME_HINTS}
+
+
+def _paper_trading_stats_for_lead_time(records, lead_time_hint):
+    """
+    total_pnl/win_rate answer "would this have made money"; avg_edge_at_
+    entry is the raw mispricing the bet was based on; pct_within_
+    uncertainty_band checks whether the model's stated confidence band,
+    specifically at THIS lead time, was honestly calibrated (a band
+    evaluated 1hr before peak isn't necessarily as well-calibrated as one
+    evaluated 2hr before - that's exactly the kind of thing this
+    comparison exists to surface); model_vs_market answers the actual
+    question the wider feature exists to test - on the days the model's
+    and Kalshi's probabilities disagreed most, which one ended up closer
+    to the real outcome? low_sample flags fewer than LOW_SAMPLE_THRESHOLD
+    bets, same guard as monthly_rollup's own low_sample - the caller
+    should show "insufficient data" rather than a percentage this thin.
     """
     bets = []
     for r in records:
         for side in ("high", "low"):
             rec = r.get(side)
-            if rec is None or rec.get("simulated_payout") is None:
+            if rec is None:
+                continue
+            trade = (rec.get("paper_trades") or {}).get(lead_time_hint)
+            if trade is None or trade.get("simulated_payout") is None:
                 continue
             bets.append({
                 "date": r["date"], "side": side,
-                "payout": rec["simulated_payout"],
-                "hit": rec["hit"],
-                "model_p": rec["model_implied_probability"],
-                "market_p": rec["market_implied_probability"],
+                "payout": trade["simulated_payout"],
+                "hit": trade["hit"],
+                "model_p": trade["model_implied_probability"],
+                "market_p": trade["market_implied_probability"],
+                "edge_at_entry": trade.get("edge_at_entry"),
+                "within_band": trade.get("within_uncertainty_band"),
             })
 
     if not bets:
-        return {"n_bets": 0, "total_pnl": None, "win_rate": None, "model_vs_market": None}
+        return {
+            "n_bets": 0, "total_pnl": None, "win_rate": None,
+            "avg_edge_at_entry": None, "pct_within_uncertainty_band": None,
+            "model_vs_market": None, "low_sample": True,
+        }
 
     total_pnl = round(sum(b["payout"] for b in bets), 2)
     win_rate = round(sum(1 for b in bets if b["hit"]) / len(bets), 3)
+    avg_edge_at_entry = _mean([b["edge_at_entry"] for b in bets if b["edge_at_entry"] is not None])
+
+    band_samples = [b["within_band"] for b in bets if b["within_band"] is not None]
+    pct_within_uncertainty_band = round(sum(band_samples) / len(band_samples), 3) if band_samples else None
 
     for b in bets:
         truth = 1.0 if b["hit"] else 0.0
@@ -468,11 +514,14 @@ def _paper_trading_stats(records):
         "n_bets": len(bets),
         "total_pnl": total_pnl,
         "win_rate": win_rate,
+        "avg_edge_at_entry": avg_edge_at_entry,
+        "pct_within_uncertainty_band": pct_within_uncertainty_band,
         "model_vs_market": {
             "n_high_disagreement_bets": len(top_n),
             "model_closer_count": model_closer,
             "market_closer_count": market_closer,
         },
+        "low_sample": len(bets) < LOW_SAMPLE_THRESHOLD,
     }
 
 
