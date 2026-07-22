@@ -46,6 +46,47 @@ def get_event_ticker_for_date(series_ticker, for_date):
     return None
 
 
+def bracket_contains(bracket, value):
+    """Whether a temperature value falls inside a bracket's strike range.
+    Kalshi settles on the officially reported whole-degree temperature,
+    while a model estimate is usually a continuous decimal (e.g. 91.40) -
+    rounding first avoids it falling in the crack between adjacent integer
+    brackets like "90 to 91" and "92 to 93", where neither would match."""
+    value = round(value)
+    floor = bracket["floor_strike"]
+    cap = bracket["cap_strike"]
+    if floor is not None and cap is not None:
+        return floor <= value <= cap
+    if floor is not None:
+        # "X or above" tail bracket - its floor_strike reuses the same
+        # number as the adjacent ranged bracket's cap_strike (e.g. "64 or
+        # above" has floor=63, same as "62 to 63"'s cap=63), so it has to
+        # be strictly greater than or both brackets would match on 63.
+        return value > floor
+    if cap is not None:
+        # Same idea in reverse for "X or below" (e.g. "87 or below" has
+        # cap=88, same as "88 to 89"'s floor=88).
+        return value < cap
+    return False
+
+
+def get_event_ticker_for_any_date(series_ticker, for_date):
+    """Same as get_event_ticker_for_date, but finds the event regardless of
+    whether it's still open or has already settled - needed for looking up
+    a past date's market after the fact (e.g. daily_performance.py, which
+    only finalizes a day once it's over, by which point that day's event
+    has typically already settled)."""
+    r = requests.get(f"{KALSHI_BASE}/events", params={"series_ticker": series_ticker, "limit": 200})
+    r.raise_for_status()
+    events = r.json()["events"]
+
+    suffix = for_date.strftime("%y%b%d").upper()
+    for e in events:
+        if e["event_ticker"].endswith(suffix):
+            return e["event_ticker"]
+    return None
+
+
 def get_market_brackets(event_ticker):
     """
     Return every bracket market in an event, sorted low to high, with its

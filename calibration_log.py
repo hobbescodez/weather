@@ -22,22 +22,61 @@ LOG_PATH = os.path.join(os.path.dirname(__file__), "calibration_log.jsonl")
 
 
 def record_snapshot(extremes):
-    """Append one row from an estimate_daily_extremes() result."""
+    """Append one row from an estimate_daily_extremes() result.
+
+    estimated_high_time/estimated_low_time are included alongside the
+    temp estimates - daily_performance.py's finalize_day() needs the
+    model's predicted peak *time*, not just its predicted value, and
+    these are the only place that's available (they're the sun-derived
+    peak-heat-hour/sunrise times, not tied to when the actual high/low
+    occurred - see weather_estimator.py's own comments on those fields).
+    """
     now = extremes["as_of"]
     row = {
         "logged_at": now.isoformat(),
         "date": now.date().isoformat(),
         "high_status": extremes["high_status"],
         "estimated_high_f": extremes["estimated_high_f"],
+        "estimated_high_time": extremes["estimated_high_time"].isoformat(),
         "observed_high_so_far_f": extremes["observed_high_so_far_f"],
+        "observed_high_so_far_time": extremes["observed_high_so_far_time"].isoformat(),
         "low_status": extremes["low_status"],
         "estimated_low_f": extremes["estimated_low_f"],
+        "estimated_low_time": extremes["estimated_low_time"].isoformat(),
         "observed_low_so_far_f": extremes["observed_low_so_far_f"],
+        "observed_low_so_far_time": extremes["observed_low_so_far_time"].isoformat(),
         "tomorrow_high_f": extremes["tomorrow_high_f"],
         "tomorrow_low_f": extremes["tomorrow_low_f"],
     }
     with open(LOG_PATH, "a") as f:
         f.write(json.dumps(row) + "\n")
+
+
+def get_last_prediction(date_str):
+    """
+    The model's final pre-peak/pre-dawn prediction for a given date
+    ("YYYY-MM-DD"), for daily_performance.py's finalize_day(): the last
+    snapshot logged while high_status was still "projected" (before that
+    day's peak-heat hour had passed) and while low_status was still
+    "today" (before dawn). Returns {"high": {"temp_f", "time"} or None,
+    "low": {"temp_f", "time"} or None}.
+    """
+    rows = [r for r in _load_rows() if r["date"] == date_str]
+    rows.sort(key=lambda r: r["logged_at"])
+
+    high = None
+    pre_peak = [r for r in rows if r["high_status"] == "projected"]
+    if pre_peak:
+        last = pre_peak[-1]
+        high = {"temp_f": last["estimated_high_f"], "time": last["estimated_high_time"]}
+
+    low = None
+    pre_dawn = [r for r in rows if r["low_status"] == "today"]
+    if pre_dawn:
+        last = pre_dawn[-1]
+        low = {"temp_f": last["estimated_low_f"], "time": last["estimated_low_time"]}
+
+    return {"high": high, "low": low}
 
 
 def _load_rows():

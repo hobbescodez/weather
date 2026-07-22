@@ -382,6 +382,38 @@
     margin-top: 10px;
   }
 
+  .perf-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .perf-table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 640px;
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+  }
+  .perf-table th {
+    text-align: left;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    padding: 0 10px 8px 0;
+    white-space: nowrap;
+  }
+  .perf-table td {
+    padding: 6px 10px 6px 0;
+    color: var(--text-soft);
+    border-top: 1px solid var(--glass-line);
+    white-space: nowrap;
+  }
+  .perf-table tr:first-child td { border-top: none; }
+  .perf-subtle { color: var(--text-faint); font-size: 10px; }
+  .perf-nodata { color: var(--text-faint); font-style: italic; }
+  .perf-flag { cursor: help; }
+
   .footer {
     font-size: 12px;
     color: var(--text-faint);
@@ -599,6 +631,27 @@
       </div>
       {{tomorrow_low_volume_svg}}
       <div class="hint">Contract count matches Kalshi's own "Volume" figure. The dollar amount is our own estimate (contracts × that hour's average price) since Kalshi doesn't publish a dollar total directly.</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Weekly performance · high ({{weekly_days_with_data}} of {{weekly_days_requested}} days)</div>
+      <div class="perf-scroll">{{weekly_high_table}}</div>
+      <div class="hint">Trailing 7 days, most recent first. Predictions only appear once calibration_log.py has logged them (recent addition) - actual/Kalshi columns work back further.</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Weekly performance · low ({{weekly_days_with_data}} of {{weekly_days_requested}} days)</div>
+      <div class="perf-scroll">{{weekly_low_table}}</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Monthly performance · {{monthly_label}}</div>
+      {{monthly_low_sample_note}}
+      <div class="module-label" style="margin-top: 4px;">High</div>
+      {{monthly_high_stats}}
+      <div class="module-label" style="margin-top: 16px;">Low</div>
+      {{monthly_low_stats}}
+      <div class="hint">Bias/MAE follow the same naming as the backtest, but signed as (actual − predicted) - the opposite sign from the backtest's error convention. Positive bias here means the actual value/time came in later or higher than predicted.</div>
     </div>
 
     <div class="glass">

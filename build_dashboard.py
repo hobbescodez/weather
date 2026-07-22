@@ -6,7 +6,7 @@ Run standalone to regenerate dashboard.html in this directory:
 """
 
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from weather_estimator import (
     estimate_temp,
@@ -15,8 +15,9 @@ from weather_estimator import (
     get_observation_history,
     get_sun_times,
 )
-from kalshi import HIGH_SERIES, LOW_SERIES, get_market_for_date, get_event_hourly_volume
+from kalshi import HIGH_SERIES, LOW_SERIES, get_market_for_date, get_event_hourly_volume, bracket_contains
 from calibration_log import record_snapshot
+from daily_performance import finalize_pending_days, weekly_table, monthly_rollup
 
 STATION = "KSEA"
 HOURS_AHEAD = 3
@@ -143,27 +144,94 @@ def build_cloud_icon_svg(cloud_pct):
 </svg>""".strip()
 
 
-def _bracket_contains(bracket, value):
-    # Kalshi settles on the officially reported whole-degree temperature,
-    # while our own estimate is a continuous decimal (e.g. 91.40) - rounding
-    # first avoids it falling in the crack between adjacent integer
-    # brackets like "90 to 91" and "92 to 93", where neither would match.
-    value = round(value)
-    floor = bracket["floor_strike"]
-    cap = bracket["cap_strike"]
-    if floor is not None and cap is not None:
-        return floor <= value <= cap
-    if floor is not None:
-        # "X or above" tail bracket - its floor_strike reuses the same
-        # number as the adjacent ranged bracket's cap_strike (e.g. "64 or
-        # above" has floor=63, same as "62 to 63"'s cap=63), so it has to
-        # be strictly greater than or both brackets would match on 63.
-        return value > floor
-    if cap is not None:
-        # Same idea in reverse for "X or below" (e.g. "87 or below" has
-        # cap=88, same as "88 to 89"'s floor=88).
-        return value < cap
-    return False
+def _fmt_dt_short(iso_str):
+    if iso_str is None:
+        return "—"
+    return datetime.fromisoformat(iso_str).strftime("%-I:%M%p").lower()
+
+
+def _fmt_num(x, digits=1, sign=False):
+    if x is None:
+        return "—"
+    return f"{x:+.{digits}f}" if sign else f"{x:.{digits}f}"
+
+
+def build_weekly_performance_table(rows, side):
+    """One row per trailing day for a single side (high/low), all spec'd
+    fields - wrapped in a horizontally-scrolling container by the
+    template since there are too many columns for a phone-width card."""
+    header = (
+        "<tr><th>Date</th><th>Predicted</th><th>1h before pred.</th>"
+        "<th>Actual</th><th>1h before actual</th>"
+        "<th>Temp Δ</th><th>Time Δ</th>"
+        "<th>Kalshi peak vol.</th><th>Kalshi implied</th></tr>"
+    )
+    body = []
+    for r in rows:
+        s = r.get(side)
+        date_label = r["date"][5:]  # MM-DD is plenty given the 7-day window
+        if not s:
+            body.append(f'<tr><td>{date_label}</td><td colspan="8" class="perf-nodata">no data</td></tr>')
+            continue
+
+        flag = f' <span class="perf-flag" title="{s["data_quality_flag"]}">⚠</span>' if s.get("data_quality_flag") else ""
+        predicted = (
+            f"{_fmt_dt_short(s['predicted_peak_time'])} · {_fmt_num(s['predicted_peak_temp'])}°"
+            if s["predicted_peak_temp"] is not None else "—"
+        )
+        actual = f"{_fmt_dt_short(s['actual_peak_time'])} · {_fmt_num(s['actual_peak_temp'])}°"
+        kalshi_vol = (
+            f"{s['kalshi_peak_volume_contracts']:,.0f} <span class=\"perf-subtle\">@ {_fmt_dt_short(s['kalshi_peak_volume_time'])}</span>"
+            if s["kalshi_peak_volume_contracts"] is not None else "—"
+        )
+        kalshi_implied = (
+            f"{s['kalshi_market_implied_value']:.0f}° <span class=\"perf-subtle\">({s['kalshi_market_implied_bracket']})</span>"
+            if s["kalshi_market_implied_value"] is not None else "—"
+        )
+        body.append(
+            "<tr>"
+            f"<td>{date_label}{flag}</td>"
+            f"<td>{predicted}</td>"
+            f"<td>{_fmt_num(s['temp_1hr_before_predicted_peak'])}°</td>"
+            f"<td>{actual}</td>"
+            f"<td>{_fmt_num(s['temp_1hr_before_actual_peak'])}°</td>"
+            f"<td>{_fmt_num(s['peak_temp_error_f'], 2, sign=True) if s['peak_temp_error_f'] is not None else '—'}</td>"
+            f"<td>{_fmt_num(s['peak_time_error_minutes'], 0, sign=True) if s['peak_time_error_minutes'] is not None else '—'} min</td>"
+            f"<td>{kalshi_vol}</td>"
+            f"<td>{kalshi_implied}</td>"
+            "</tr>"
+        )
+    return f'<table class="perf-table"><thead>{header}</thead><tbody>{"".join(body)}</tbody></table>'
+
+
+def build_monthly_stats_rows(stats):
+    has_anything = (
+        stats["n_temp_error_samples"] > 0
+        or stats["mean_kalshi_peak_volume_contracts"] is not None
+        or stats["n_hit_samples"] > 0
+    )
+    if not has_anything:
+        return '<div class="hint">No finalized days yet this month.</div>'
+
+    def row(label, value):
+        return f'<div class="range-row"><span class="range-label">{label}</span><span class="range-values">{value}</span></div>'
+
+    rows = []
+    if stats["n_temp_error_samples"] > 0:
+        rows.append(row("Temp bias (signed)", f"{_fmt_num(stats['bias_f'], 2, sign=True)}°F ({stats['n_temp_error_samples']} days)"))
+        rows.append(row("Temp MAE", f"{_fmt_num(stats['mae_f'], 2)}°F"))
+    if stats["time_bias_minutes"] is not None:
+        rows.append(row("Peak-time bias (signed)", f"{_fmt_num(stats['time_bias_minutes'], 0, sign=True)} min"))
+        rows.append(row("Peak-time MAE", f"{_fmt_num(stats['time_mae_minutes'], 0)} min"))
+    if stats["mean_kalshi_peak_volume_contracts"] is not None:
+        rows.append(row("Mean Kalshi peak volume", f"{stats['mean_kalshi_peak_volume_contracts']:,.0f} contracts"))
+    if stats["model_in_kalshi_bracket_rate"] is not None:
+        rows.append(row("Model in Kalshi's top bracket", f"{stats['model_in_kalshi_bracket_rate'] * 100:.0f}% ({stats['n_hit_samples']} days)"))
+    if stats["n_temp_error_samples"] == 0:
+        rows.append('<div class="hint">No model predictions logged yet this month - calibration_log.py only started capturing pre-peak predictions recently.</div>')
+    return "\n".join(rows)
+
+
 
 
 THIN_VOLUME_THRESHOLD = 5  # contracts traded - below this, last_price is easy to be stale/unreliable
@@ -202,7 +270,7 @@ def build_kalshi_rows(brackets, our_estimate, estimate_label):
         thin_class = " kalshi-row-thin" if is_thin else ""
         thin_flag = ' <span class="kalshi-thin-flag">thin</span>' if is_thin else ""
 
-        is_match = _bracket_contains(b, our_estimate)
+        is_match = bracket_contains(b, our_estimate)
         match_class = " kalshi-row-match" if is_match else ""
         rows.append(
             f'<div class="kalshi-row{match_class}{thin_class}">'
@@ -252,6 +320,13 @@ def main():
     record_snapshot(extremes)
 
     now = est["as_of"]
+
+    try:
+        finalize_pending_days(STATION, lookback_days=7)
+    except Exception as e:
+        print(f"daily_performance: finalize_pending_days failed: {e}")
+    weekly_perf = weekly_table(STATION, days=7)
+    monthly_perf = monthly_rollup(STATION, now.year, now.month)
 
     # Kalshi's KSEA markets are dated by Seattle's own calendar day, not
     # the system clock's - this container runs on UTC, which is already
@@ -417,6 +492,17 @@ def main():
         "tomorrow_low_volume_total": f"{tomorrow_low_volume['total_contracts']:,.0f}" if tomorrow_low_volume else "—",
         "tomorrow_low_volume_dollars_est": f"≈${tomorrow_low_volume['total_dollars']:,.0f} est." if tomorrow_low_volume else "—",
         "tomorrow_low_volume_svg": build_volume_bars_svg(tomorrow_low_volume["hourly"], now.tzinfo) if tomorrow_low_volume else '<div class="hint">Volume unavailable.</div>',
+        "weekly_days_with_data": weekly_perf["days_with_data"],
+        "weekly_days_requested": weekly_perf["days_requested"],
+        "weekly_high_table": build_weekly_performance_table(weekly_perf["rows"], "high"),
+        "weekly_low_table": build_weekly_performance_table(weekly_perf["rows"], "low"),
+        "monthly_label": now.strftime("%B %Y"),
+        "monthly_low_sample_note": (
+            f'<div class="hint">Only {monthly_perf["days_with_data"]} day(s) finalized so far this month - treat these as low-sample, not a stable average.</div>'
+            if monthly_perf["low_sample"] else ""
+        ),
+        "monthly_high_stats": build_monthly_stats_rows(monthly_perf["high"]),
+        "monthly_low_stats": build_monthly_stats_rows(monthly_perf["low"]),
         "sky_class": sky_class,
         "condition_text": condition_text,
         "obs_json_url": obs_json_url,
