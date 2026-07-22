@@ -15,7 +15,7 @@ from weather_estimator import (
     get_observation_history,
     get_sun_times,
 )
-from kalshi import HIGH_SERIES, LOW_SERIES, get_market_for_date
+from kalshi import HIGH_SERIES, LOW_SERIES, get_market_for_date, get_event_hourly_volume
 from calibration_log import record_snapshot
 
 STATION = "KSEA"
@@ -69,6 +69,43 @@ def build_sparkline_svg(times, temps, est_time, est_temp, width=640, height=160)
   <circle cx="{now_x:.1f}" cy="{pts[-1][1]:.1f}" r="3.5" class="spark-now-dot" />
   <circle cx="{est_pt[0]:.1f}" cy="{est_pt[1]:.1f}" r="4.5" class="spark-est-dot" />
 </svg>
+""".strip()
+
+
+def build_volume_bars_svg(hourly, tzinfo, width=640, height=110):
+    """Bar chart of a Kalshi event's estimated dollar volume per hour, in
+    the same visual language as the temperature sparkline - so trading
+    activity reads as a shape (building up, tapering off) rather than a
+    wall of numbers."""
+    if not hourly:
+        return '<div class="hint">No trades in this window yet.</div>'
+
+    pad_x, pad_top, pad_bottom = 4, 10, 18
+    values = [h["dollars"] for h in hourly]
+    max_val = max(max(values), 1.0)
+    n = len(hourly)
+    gap = 3
+    bar_w = max((width - 2 * pad_x - gap * (n - 1)) / n, 1)
+
+    bars = []
+    for i, h in enumerate(hourly):
+        bar_h = (height - pad_top - pad_bottom) * (h["dollars"] / max_val)
+        x = pad_x + i * (bar_w + gap)
+        y = height - pad_bottom - bar_h
+        label = h["hour_end"].astimezone(tzinfo).strftime("%-I%p").lower()
+        bars.append(
+            f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{max(bar_h, 1):.1f}" '
+            f'class="volume-bar"><title>{label}: ${h["dollars"]:,.0f}</title></rect>'
+        )
+
+    first_label = hourly[0]["hour_end"].astimezone(tzinfo).strftime("%-I%p").lower()
+    last_label = hourly[-1]["hour_end"].astimezone(tzinfo).strftime("%-I%p").lower()
+
+    return f"""
+<svg viewBox="0 0 {width} {height}" class="volume-chart" preserveAspectRatio="none" role="img" aria-label="Estimated dollar volume traded per hour">
+  {"".join(bars)}
+</svg>
+<div class="spark-caption"><span>{first_label}</span><span>{last_label}</span></div>
 """.strip()
 
 
@@ -218,6 +255,17 @@ def main():
     except Exception as e:
         print(f"Kalshi low market fetch failed: {e}")
         kalshi_low = None
+
+    try:
+        high_volume = get_event_hourly_volume(HIGH_SERIES, kalshi_high["brackets"], hours=24) if kalshi_high else None
+    except Exception as e:
+        print(f"Kalshi high volume fetch failed: {e}")
+        high_volume = None
+    try:
+        low_volume = get_event_hourly_volume(LOW_SERIES, kalshi_low["brackets"], hours=24) if kalshi_low else None
+    except Exception as e:
+        print(f"Kalshi low volume fetch failed: {e}")
+        low_volume = None
     try:
         kalshi_tomorrow_high = get_market_for_date(HIGH_SERIES, tomorrow)
     except Exception as e:
@@ -332,6 +380,10 @@ def main():
         "kalshi_tomorrow_high_rows": build_kalshi_rows(kalshi_tomorrow_high["brackets"], extremes["tomorrow_high_f"], "Estimated high") if kalshi_tomorrow_high else '<div class="hint">Market not open yet.</div>',
         "kalshi_tomorrow_low_ticker": kalshi_tomorrow_low["event_ticker"] if kalshi_tomorrow_low else "no open market",
         "kalshi_tomorrow_low_rows": build_kalshi_rows(kalshi_tomorrow_low["brackets"], extremes["tomorrow_low_f"], "Estimated low") if kalshi_tomorrow_low else '<div class="hint">Market not open yet.</div>',
+        "high_volume_total": f"${high_volume['total_dollars']:,.0f}" if high_volume else "—",
+        "high_volume_svg": build_volume_bars_svg(high_volume["hourly"], now.tzinfo) if high_volume else '<div class="hint">Volume unavailable.</div>',
+        "low_volume_total": f"${low_volume['total_dollars']:,.0f}" if low_volume else "—",
+        "low_volume_svg": build_volume_bars_svg(low_volume["hourly"], now.tzinfo) if low_volume else '<div class="hint">Volume unavailable.</div>',
         "sky_class": sky_class,
         "condition_text": condition_text,
         "obs_json_url": obs_json_url,

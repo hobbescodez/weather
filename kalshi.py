@@ -20,6 +20,9 @@ data-completeness caveat - not fixed as of this module's writing).
 pip install requests
 """
 
+import time
+from datetime import datetime, timezone
+
 import requests
 
 KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
@@ -76,6 +79,56 @@ def get_market_brackets(event_ticker):
             "volume": to_float(m.get("volume_fp")),
         })
     return rows
+
+
+def get_event_hourly_volume(series_ticker, brackets, hours=24):
+    """
+    Hourly dollar volume traded across an entire event, by summing every
+    bracket's own hourly candlesticks (Kalshi already tracks this exactly
+    per market - no need to snapshot it ourselves over time). Each
+    candlestick gives contracts traded that hour and the mean trade price;
+    contracts * mean_price estimates the actual dollars exchanged (Kalshi's
+    own site figure, like a "$100k+ Vol" total, is this same idea summed
+    over an event's full lifetime rather than just one hour).
+
+    An hour with zero trades has no "price" data at all (checked directly
+    against the API), so those are skipped rather than treated as $0 at a
+    real price.
+    """
+    end_ts = int(time.time())
+    start_ts = end_ts - hours * 3600
+    buckets = {}  # end_period_ts -> {"contracts": float, "dollars": float}
+
+    for b in brackets:
+        r = requests.get(
+            f"{KALSHI_BASE}/series/{series_ticker}/markets/{b['ticker']}/candlesticks",
+            params={"start_ts": start_ts, "end_ts": end_ts, "period_interval": 60},
+        )
+        r.raise_for_status()
+        for c in r.json()["candlesticks"]:
+            contracts = float(c["volume_fp"])
+            if contracts <= 0:
+                continue
+            mean_price = c["price"].get("mean_dollars")
+            if mean_price is None:
+                continue
+            bucket = buckets.setdefault(c["end_period_ts"], {"contracts": 0.0, "dollars": 0.0})
+            bucket["contracts"] += contracts
+            bucket["dollars"] += contracts * float(mean_price)
+
+    hourly = [
+        {
+            "hour_end": datetime.fromtimestamp(ts, tz=timezone.utc),
+            "contracts": round(v["contracts"], 2),
+            "dollars": round(v["dollars"], 2),
+        }
+        for ts, v in sorted(buckets.items())
+    ]
+    return {
+        "hourly": hourly,
+        "total_dollars": round(sum(h["dollars"] for h in hourly), 2),
+        "total_contracts": round(sum(h["contracts"] for h in hourly), 2),
+    }
 
 
 def get_market_for_date(series_ticker, for_date):

@@ -227,6 +227,9 @@
     margin-top: 6px;
   }
 
+  .volume-chart { width: 100%; height: auto; display: block; margin-top: 10px; }
+  .volume-bar { fill: var(--accent-warm-soft); }
+
   .hilo-detail-row {
     display: flex;
     flex-direction: column;
@@ -509,10 +512,30 @@
     </div>
 
     <div class="glass">
+      <div class="module-label">Kalshi · today's high market volume</div>
+      <div class="estimate-row">
+        <span class="estimate-value">{{high_volume_total}}</span>
+        <span class="estimate-label">est. dollars traded, last 24h</span>
+      </div>
+      {{high_volume_svg}}
+      <div class="hint">Contracts traded each hour × that hour's average price - a rough read on how much money is moving, not an official Kalshi figure.</div>
+    </div>
+
+    <div class="glass">
       <div class="module-label">Kalshi · today's low market</div>
       {{kalshi_low_rows}}
       <div class="hint">Trades stay manual for now - this is a side-by-side view for a human to review, not an automated signal.</div>
       <div class="kalshi-ticker">{{kalshi_low_ticker}}</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Kalshi · today's low market volume</div>
+      <div class="estimate-row">
+        <span class="estimate-value">{{low_volume_total}}</span>
+        <span class="estimate-label">est. dollars traded, last 24h</span>
+      </div>
+      {{low_volume_svg}}
+      <div class="hint">Contracts traded each hour × that hour's average price - a rough read on how much money is moving, not an official Kalshi figure.</div>
     </div>
 
     <div class="glass">
