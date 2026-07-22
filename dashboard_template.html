@@ -478,7 +478,8 @@
         <span class="range-label">Uncertainty band</span>
         <span class="range-values">{{range_low}}°–{{range_high}}° (±{{band_width}}°)</span>
       </div>
-      <div class="hint">Widens mainly when pressure is falling (unsettled weather approaching) - separate from the trend confidence above.</div>
+      <div class="hint">Widens when local pressure is falling (unsettled weather approaching), and independently when the marine push or offshore flow signals below are elevated - separate from the trend confidence above.</div>
+      {{uncertainty_note_html}}
     </div>
 
     <div class="glass">
@@ -693,8 +694,18 @@
           <div class="label">Trend confidence</div>
           <div class="value">{{confidence_pct}}%</div>
         </div>
+        <div class="stat">
+          <div class="label">Marine push</div>
+          <div class="value"><span class="chip {{marine_push_class}}">{{marine_push_label}}</span></div>
+          <div class="perf-subtle" style="margin-top: 2px;">{{marine_push_meta}}</div>
+        </div>
+        <div class="stat">
+          <div class="label">Offshore flow</div>
+          <div class="value"><span class="chip {{offshore_flow_class}}">{{offshore_flow_label}}</span></div>
+          <div class="perf-subtle" style="margin-top: 2px;">{{offshore_flow_meta}}</div>
+        </div>
       </div>
-      <div class="hint">Trend confidence is how much the model trusts its own short-term extrapolation right now - not confidence in the readings above. It's deliberately low near sunrise or the day's peak-heat hour, since the trend is about to reverse there regardless of how strong it looks right before.</div>
+      <div class="hint">Trend confidence is how much the model trusts its own short-term extrapolation right now - not confidence in the readings above. It's deliberately low near sunrise or the day's peak-heat hour, since the trend is about to reverse there regardless of how strong it looks right before. Marine push (coastal/strait pressure gradient) and offshore flow (interior gap-wind gradient) are two distinguishable patterns behind Seattle temperature swings - the latter is the mechanism behind most real heat events, not just solar heating. Both are still first-pass signals, not yet calibrated against real outcomes (see calibration log).</div>
     </div>
 
     <div>

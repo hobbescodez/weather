@@ -21,7 +21,7 @@ import os
 LOG_PATH = os.path.join(os.path.dirname(__file__), "calibration_log.jsonl")
 
 
-def record_snapshot(extremes):
+def record_snapshot(extremes, est=None):
     """Append one row from an estimate_daily_extremes() result.
 
     estimated_high_time/estimated_low_time are included alongside the
@@ -30,6 +30,19 @@ def record_snapshot(extremes):
     these are the only place that's available (they're the sun-derived
     peak-heat-hour/sunrise times, not tied to when the actual high/low
     occurred - see weather_estimator.py's own comments on those fields).
+
+    est: optionally, an estimate_temp() result logged alongside - the
+    raw multi-station gradient network readings and the
+    marine_push_index/offshore_flow_index derived from them (see
+    weather_estimator.py's Calibration section), logged every day
+    regardless of whether anything unusual happens. That's the point:
+    once enough days accumulate (including at least one real marine-push
+    and, ideally, one real offshore-flow/heat event), comparing days with
+    large peak_temp_error_f against what these indices were reading
+    beforehand is how those indices earn (or lose) a larger role in the
+    estimate, instead of staying hand-picked constants forever. Omitted
+    (all fields None) if est isn't passed - keeps this callable exactly
+    as before for any other caller.
     """
     now = extremes["as_of"]
     row = {
@@ -47,6 +60,20 @@ def record_snapshot(extremes):
         "observed_low_so_far_time": extremes["observed_low_so_far_time"].isoformat(),
         "tomorrow_high_f": extremes["tomorrow_high_f"],
         "tomorrow_low_f": extremes["tomorrow_low_f"],
+        "pressure_gradient_station": est["pressure_gradient_station"] if est else None,
+        "pressure_gradient_inhg": est["pressure_gradient_inhg"] if est else None,
+        "pressure_gradient_trend_inhg_per_hr": est["pressure_gradient_trend_inhg_per_hr"] if est else None,
+        "strait_station": est["strait_signal"]["station"] if est and est.get("strait_signal") else None,
+        "strait_pressure_gradient_inhg": est["strait_signal"]["pressure_gradient_inhg"] if est and est.get("strait_signal") else None,
+        "strait_pressure_gradient_trend_inhg_per_hr": est["strait_signal"]["pressure_gradient_trend_inhg_per_hr"] if est and est.get("strait_signal") else None,
+        "interior_gap_station": est["interior_gap_signal"]["station"] if est and est.get("interior_gap_signal") else None,
+        "interior_gap_pressure_gradient_inhg": est["interior_gap_signal"]["pressure_gradient_inhg"] if est and est.get("interior_gap_signal") else None,
+        "interior_gap_pressure_gradient_trend_inhg_per_hr": est["interior_gap_signal"]["pressure_gradient_trend_inhg_per_hr"] if est and est.get("interior_gap_signal") else None,
+        "interior_gap_temp_gradient_f": est["interior_gap_signal"]["temp_gradient_f"] if est and est.get("interior_gap_signal") else None,
+        "interior_gap_temp_gradient_trend_f_per_hr": est["interior_gap_signal"]["temp_gradient_trend_f_per_hr"] if est and est.get("interior_gap_signal") else None,
+        "marine_push_index": est["marine_push_index"] if est else None,
+        "offshore_flow_index": est["offshore_flow_index"] if est else None,
+        "uncertainty_note": est["uncertainty_note"] if est else None,
     }
     with open(LOG_PATH, "a") as f:
         f.write(json.dumps(row) + "\n")

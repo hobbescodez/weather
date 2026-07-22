@@ -237,6 +237,41 @@ def _fetch_upwind_df(start, end, candidates=None):
     return None, None
 
 
+def _merge_and_gradient(df_local, df_other, value_col, tolerance_minutes=20):
+    """
+    Aligns two stations' observations by nearest timestamp within tolerance
+    (same pattern used by backtest to score a projection against the closest
+    real observation) and computes (local - other) for value_col plus its
+    trend via np.polyfit - the same trend-fitting approach used everywhere
+    else in this file. Shared by get_pressure_gradient (coastal) and
+    get_station_network_signals (strait/interior_gap) so pressure and
+    temperature gradients for any station pair go through one code path.
+
+    Returns (gradient_now, gradient_trend_per_hr), or (None, None) if fewer
+    than 2 aligned readings exist.
+    """
+    merged = pd.merge_asof(
+        df_local[["time", value_col]].sort_values("time"),
+        df_other[["time", value_col]].sort_values("time"),
+        on="time", direction="nearest", tolerance=timedelta(minutes=tolerance_minutes),
+        suffixes=("_local", "_other"),
+    )
+    merged = merged.dropna(subset=[f"{value_col}_local", f"{value_col}_other"])
+    if len(merged) < 2:
+        return None, None
+
+    merged["gradient"] = merged[f"{value_col}_local"] - merged[f"{value_col}_other"]
+    t0 = merged["time"].iloc[0]
+    elapsed = (merged["time"] - t0).dt.total_seconds() / 3600
+    gradient_now = merged["gradient"].iloc[-1]
+    if merged["gradient"].nunique() > 1:
+        gradient_trend = np.polyfit(elapsed, merged["gradient"], 1)[0]
+    else:
+        gradient_trend = 0.0
+
+    return round(gradient_now, 4), round(gradient_trend, 4)
+
+
 def get_pressure_gradient(df_local, df_upwind=None, upwind_station_id=None):
     """
     Marine-air intrusions into Puget Sound are driven by a pressure gradient
@@ -270,26 +305,209 @@ def get_pressure_gradient(df_local, df_upwind=None, upwind_station_id=None):
     else:
         used_station = upwind_station_id or "prefetched"
 
-    merged = pd.merge_asof(
-        df_local[["time", "pressure_inhg"]].sort_values("time"),
-        df_upwind[["time", "pressure_inhg"]].sort_values("time"),
-        on="time", direction="nearest", tolerance=timedelta(minutes=20),
-        suffixes=("_local", "_upwind"),
-    )
-    merged = merged.dropna(subset=["pressure_inhg_local", "pressure_inhg_upwind"])
-    if len(merged) < 2:
+    gradient_now, gradient_trend = _merge_and_gradient(df_local, df_upwind, "pressure_inhg")
+    if gradient_now is None:
         return None, None, used_station, "not enough aligned upwind readings; no gradient adjustment applied"
 
-    merged["gradient"] = merged["pressure_inhg_local"] - merged["pressure_inhg_upwind"]
-    t0 = merged["time"].iloc[0]
-    elapsed = (merged["time"] - t0).dt.total_seconds() / 3600
-    gradient_now = merged["gradient"].iloc[-1]
-    if merged["gradient"].nunique() > 1:
-        gradient_trend = np.polyfit(elapsed, merged["gradient"], 1)[0]
-    else:
-        gradient_trend = 0.0
+    return gradient_now, gradient_trend, used_station, None
 
-    return round(gradient_now, 4), round(gradient_trend, 4), used_station, None
+
+# ---------------------------------------------------------------------------
+# Multi-station gradient network (strait / interior_gap roles)
+#
+# The coastal role above (get_pressure_gradient) only sees one directional
+# pattern: marine air pushing in from the coast. Real Seattle-area swings
+# also include the opposite pattern - warm, dry offshore/gap flow spilling
+# from the interior through the Cascade passes, the actual mechanism behind
+# most real heat events (not just gradual solar heating), which a single
+# coastal station pair has zero visibility into. This section adds two more
+# roles so the two patterns can be told apart instead of both just widening
+# a single generic "something's changing" uncertainty flag.
+# ---------------------------------------------------------------------------
+
+# Each role's candidates are tried in order; the first with fresh, usable
+# data wins (see _fetch_role_df). Checked directly against live data before
+# picking these:
+#   - strait: KCLM (Port Angeles) is the textbook Strait of Juan de Fuca
+#     station, but was returning a 4-hour-stale feed when checked (only 4 of
+#     the last 8 requested observations, latest ~4h old) - a real reporting
+#     gap, not just infrequent cadence. KORS (Orcas Island/Eastsound) sits
+#     first instead: fresh (~25 min old) and 8/8 with pressure, still well
+#     within the San Juans/strait convergence zone. KCLM stays listed as a
+#     fallback in case its feed recovers.
+#   - interior_gap: KELN (Ellensburg) and KYKM (Yakima) were both fresh
+#     (8/8 with pressure, ~5 min cadence) when checked - either is a fine
+#     "east of the Cascades" station for the classic Seattle-to-Yakima/
+#     Ellensburg gap-wind differential; KELN goes first arbitrarily.
+STATION_NETWORK = {
+    "strait": ["KORS", "KCLM"],
+    "interior_gap": ["KELN", "KYKM"],
+}
+
+# A station that's technically reachable but hasn't reported in hours (like
+# KCLM when checked - see above) is functionally unavailable for a *live*
+# gradient, not a source of real signal - using its stale reading as if it
+# were current would silently misrepresent "right now." Treated the same as
+# an unreachable station: skip to the next candidate.
+STALE_OBS_TOLERANCE_MINUTES = 90
+
+
+def _fetch_role_df(role, start, end, candidates=None):
+    """
+    Try each candidate station for a role (strait/interior_gap) in order,
+    skipping any that error out OR whose latest reading is stale (see
+    STALE_OBS_TOLERANCE_MINUTES) relative to `end`. Same
+    try-in-order-and-degrade shape as _fetch_upwind_df, generalized across
+    roles and with the added freshness check.
+
+    Returns (df, station_id) for the first usable candidate, or (None, None)
+    if every candidate fails or is stale.
+    """
+    for station in (candidates or STATION_NETWORK[role]):
+        try:
+            df = get_observation_history(station, start=start, end=end)
+        except Exception:
+            continue
+        staleness_minutes = (end - df["time"].iloc[-1]).total_seconds() / 60
+        if staleness_minutes > STALE_OBS_TOLERANCE_MINUTES:
+            continue
+        return df, station
+    return None, None
+
+
+def get_station_network_signals(df_local, df_strait=None, df_interior_gap=None):
+    """
+    Computes the strait and interior_gap gradient signals (coastal is
+    get_pressure_gradient, kept separate/unchanged above). For each role:
+      - pressure gradient (local - role station) and its trend, same as the
+        coastal signal.
+      - temp gradient and its trend, computed ONLY for interior_gap - a
+        KSEA-vs-coastal temp differential isn't the physically meaningful
+        one here (see module notes on offshore flow); a KSEA-vs-interior one
+        is, since a big Yakima/Ellensburg-vs-Seattle temp gap building up
+        often precedes a gap-wind event reaching the coast.
+
+    df_strait/df_interior_gap: pass a pre-fetched DataFrame to reuse it
+    (e.g. backtest, which fetches each role once for the whole window rather
+    than per rolling slice); pass False to mean "already tried for this
+    whole run, not available - don't retry" (also for backtest, so hundreds
+    of rolling-window calls don't each re-attempt and fail against the same
+    down station); leave as None (the default) to fetch fresh right now -
+    the live single-call path.
+
+    Never raises: a role with no usable candidate just gets None fields and
+    a note explaining why, so a missing/stale station degrades gracefully
+    instead of blocking the whole estimate.
+
+    Returns {"strait": {...}, "interior_gap": {...}}.
+    """
+    start = df_local["time"].iloc[0] - timedelta(minutes=20)
+    end = df_local["time"].iloc[-1] + timedelta(minutes=20)
+
+    signals = {}
+    for role, prefetched in (("strait", df_strait), ("interior_gap", df_interior_gap)):
+        if prefetched is False:
+            df_other, station = None, None
+        elif prefetched is None:
+            df_other, station = _fetch_role_df(role, start, end)
+        else:
+            df_other, station = prefetched, "prefetched"
+
+        if df_other is None:
+            signals[role] = {
+                "station": None,
+                "pressure_gradient_inhg": None,
+                "pressure_gradient_trend_inhg_per_hr": None,
+                "temp_gradient_f": None,
+                "temp_gradient_trend_f_per_hr": None,
+                "note": f"no usable {role} station data available (unreachable or stale); signal not computed",
+            }
+            continue
+
+        p_now, p_trend = _merge_and_gradient(df_local, df_other, "pressure_inhg")
+        t_now = t_trend = None
+        if role == "interior_gap":
+            t_now, t_trend = _merge_and_gradient(df_local, df_other, "temp_f")
+
+        signals[role] = {
+            "station": station,
+            "pressure_gradient_inhg": p_now,
+            "pressure_gradient_trend_inhg_per_hr": p_trend,
+            "temp_gradient_f": t_now,
+            "temp_gradient_trend_f_per_hr": t_trend,
+            "note": None if p_now is not None else "not enough aligned readings; gradient not computed",
+        }
+    return signals
+
+
+# ---------------------------------------------------------------------------
+# Derived composite indices
+#
+# First-pass formulas, not hand-tuned-and-final - see calibration_log.py's
+# per-day logging of these raw values plus daily_performance.py's error
+# tracking. Once enough days accumulate (including at least one real
+# marine-push and, ideally, one real offshore-flow/heat event), these
+# weights/thresholds should get refit from whether large peak_temp_error_f
+# days actually showed an unusual reading here beforehand - not trusted as
+# hand-picked constants indefinitely. Scaled arbitrarily so a "typical"
+# gradient-trend event (per the coastal Jul 20 case study, about -0.01
+# inHg/hr) lands around 10 on the index - purely to make the dashboard
+# number legible, not a calibrated unit.
+# ---------------------------------------------------------------------------
+
+_PRESSURE_TREND_TO_INDEX_SCALE = 1000  # inHg/hr -> index points
+_TEMP_TREND_TO_INDEX_SCALE = 10  # F/hr -> index points
+
+
+def compute_marine_push_index(coastal_gradient_trend, strait_signal):
+    """
+    Positive/increasing = marine air more likely pushing in. Built from the
+    same "shrinking/negative-trending gradient precedes onshore push"
+    relationship get_pressure_gradient already established for the coastal
+    station (see its docstring re: the Jul 20 event); the strait station's
+    own KSEA-relative pressure gradient trend is averaged in as a second,
+    independent read on the same push when available - a convergence-zone
+    station feels the same onshore surge, just from a different angle.
+
+    Returns None only if neither station's gradient trend is available.
+    """
+    trends = [t for t in (
+        coastal_gradient_trend,
+        strait_signal.get("pressure_gradient_trend_inhg_per_hr") if strait_signal else None,
+    ) if t is not None]
+    if not trends:
+        return None
+    avg_trend = sum(trends) / len(trends)
+    return round(-avg_trend * _PRESSURE_TREND_TO_INDEX_SCALE, 1)
+
+
+def compute_offshore_flow_index(interior_gap_signal):
+    """
+    Positive/increasing = offshore/gap flow strengthening - conditions favor
+    rapid warming and dropping humidity, the classic Seattle heat-event
+    mechanism (see module notes above). This is a hypothesis, not yet
+    validated against a real event: this signal has no history to backtest
+    against (nothing was logging it until now - see calibration_log.py). The
+    working theory this first pass encodes: the interior's pressure gradient
+    versus KSEA deepening, AND the interior warming faster than KSEA (its
+    temp gradient trending more negative), both plausibly precede offshore
+    flow reaching the coast - so both contribute.
+
+    Returns None if neither trend is available.
+    """
+    if interior_gap_signal is None:
+        return None
+    p_trend = interior_gap_signal.get("pressure_gradient_trend_inhg_per_hr")
+    t_trend = interior_gap_signal.get("temp_gradient_trend_f_per_hr")
+    if p_trend is None and t_trend is None:
+        return None
+
+    contribution = 0.0
+    if p_trend is not None:
+        contribution += -p_trend * _PRESSURE_TREND_TO_INDEX_SCALE
+    if t_trend is not None:
+        contribution += -t_trend * _TEMP_TREND_TO_INDEX_SCALE
+    return round(contribution, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -381,22 +599,36 @@ def _cloud_wind_damping(df):
     return max(0.5, factor)
 
 
-def _pressure_trend_and_uncertainty(df, elapsed_hours, hours_ahead, gradient_trend=None):
+# First-pass thresholds (see the indices' own docstrings re: calibration) -
+# an index above this is "elevated enough to call out," not a calibrated
+# cutoff.
+MARINE_PUSH_INDEX_THRESHOLD = 8.0
+OFFSHORE_FLOW_INDEX_THRESHOLD = 8.0
+
+
+def _pressure_trend_and_uncertainty(df, elapsed_hours, hours_ahead, marine_push_index=None, offshore_flow_index=None):
     """
     Falling pressure signals a front/unsettled system may be approaching,
     but not which direction temp will move - so this widens the uncertainty
     band around the point estimate rather than shifting it.
 
-    gradient_trend, if given, is the local-minus-upwind pressure gradient's
-    own trend (see get_pressure_gradient) - a shrinking/negative-trending
-    gradient has empirically preceded marine air reaching KSEA (the Jul 20
-    event), the same kind of "something's changing, direction unclear from
-    here" signal as a falling local pressure trend. It widens uncertainty the
-    same way, as an independent check rather than a replacement.
+    marine_push_index/offshore_flow_index (see compute_marine_push_index/
+    compute_offshore_flow_index), when elevated, widen uncertainty further -
+    each independently, since they're distinguishable physical patterns
+    (marine push vs. offshore/gap flow), not the same "something's changing"
+    flag counted twice. This replaces the old single coastal-gradient-only
+    widening: marine_push_index already folds that same coastal reading in
+    (plus the strait station when available), so this is a superset, not an
+    addition on top of it.
 
-    Returns (pressure_trend_inhg_per_hr, uncertainty_f).
+    Returns (pressure_trend_inhg_per_hr, uncertainty_f, uncertainty_note).
+    uncertainty_note is a short explanation of what's driving uncertainty
+    beyond the horizon-only baseline (or None if nothing beyond baseline
+    applied), so the dashboard doesn't just show a wider band with no
+    explanation of which pattern is implicated.
     """
     base_uncertainty = 1.0 + 0.3 * hours_ahead  # baseline grows with horizon
+    notes = []
 
     if df["pressure_inhg"].notna().sum() < 2:
         pressure_trend, uncertainty = None, base_uncertainty
@@ -407,17 +639,21 @@ def _pressure_trend_and_uncertainty(df, elapsed_hours, hours_ahead, gradient_tre
         # a drop of ~0.03 inHg/hr or faster is a reasonably brisk pressure fall
         if p_slope < 0:
             uncertainty = base_uncertainty + min(2.0, abs(p_slope) * 40)
+            notes.append("local pressure falling")
         else:
             uncertainty = base_uncertainty
         pressure_trend = round(p_slope, 4)
 
-    # a gradient trend more negative than about -0.005 inHg/hr is a
-    # meaningfully shrinking gradient, not just noise in the ~0.01 inHg
-    # resolution these observations report at
-    if gradient_trend is not None and gradient_trend < -0.005:
-        uncertainty += min(1.5, abs(gradient_trend) * 60)
+    if marine_push_index is not None and marine_push_index > MARINE_PUSH_INDEX_THRESHOLD:
+        uncertainty += min(1.5, marine_push_index / 20)
+        notes.append("marine push signal rising")
 
-    return pressure_trend, round(uncertainty, 1)
+    if offshore_flow_index is not None and offshore_flow_index > OFFSHORE_FLOW_INDEX_THRESHOLD:
+        uncertainty += min(1.5, offshore_flow_index / 20)
+        notes.append("offshore flow signal rising")
+
+    uncertainty_note = "; ".join(notes) if notes else None
+    return pressure_trend, round(uncertainty, 1), uncertainty_note
 
 
 # A short local trend (fit over the last handful of observations) is only a
@@ -433,7 +669,7 @@ TREND_HORIZON_HOURS = 6
 def estimate_from_df(
     df, hours_ahead, lat, lon,
     use_nws_forecast=True, nws_blend_mode="divergence",
-    use_gradient=True, df_upwind=None,
+    use_gradient=True, df_upwind=None, df_strait=None, df_interior_gap=None,
 ):
     """
     Core estimation logic, given a dataframe of observations. Reused by both
@@ -452,9 +688,14 @@ def estimate_from_df(
         by more than 3F, on the theory that a big gap means the trend is
         missing something (a front, a marine push) the forecast model's real
         atmospheric dynamics can see.
-    use_gradient / df_upwind: see get_pressure_gradient. df_upwind lets a
-        caller (backtest) pre-fetch the upwind station's data once instead of
-        re-fetching per rolling window.
+    use_gradient: master switch for the whole cross-station network
+        (coastal + strait + interior_gap) - each role still degrades
+        independently if its own candidates are unavailable (see
+        get_station_network_signals); this only gates whether any of it is
+        attempted at all.
+    df_upwind / df_strait / df_interior_gap: see get_pressure_gradient /
+        get_station_network_signals. Let a caller (backtest) pre-fetch each
+        role's data once instead of re-fetching per rolling window.
     """
     latest = df.iloc[-1]
     now = latest["time"]
@@ -486,13 +727,21 @@ def estimate_from_df(
         combined_damping *= 0.4
 
     gradient_now = gradient_trend = gradient_station = gradient_note = None
+    network_signals = {"strait": None, "interior_gap": None}
+    marine_push_index = offshore_flow_index = None
     if use_gradient:
         gradient_now, gradient_trend, gradient_station, gradient_note = get_pressure_gradient(
             df, df_upwind=df_upwind
         )
+        network_signals = get_station_network_signals(
+            df, df_strait=df_strait, df_interior_gap=df_interior_gap
+        )
+        marine_push_index = compute_marine_push_index(gradient_trend, network_signals["strait"])
+        offshore_flow_index = compute_offshore_flow_index(network_signals["interior_gap"])
 
-    pressure_trend, uncertainty_f = _pressure_trend_and_uncertainty(
-        df, elapsed_hours, hours_ahead, gradient_trend=gradient_trend
+    pressure_trend, uncertainty_f, uncertainty_note = _pressure_trend_and_uncertainty(
+        df, elapsed_hours, hours_ahead,
+        marine_push_index=marine_push_index, offshore_flow_index=offshore_flow_index,
     )
 
     raw_change = slope * min(hours_ahead, TREND_HORIZON_HOURS)
@@ -541,6 +790,11 @@ def estimate_from_df(
         "pressure_gradient_trend_inhg_per_hr": gradient_trend,
         "pressure_gradient_station": gradient_station,
         "pressure_gradient_note": gradient_note,
+        "strait_signal": network_signals["strait"],
+        "interior_gap_signal": network_signals["interior_gap"],
+        "marine_push_index": marine_push_index,
+        "offshore_flow_index": offshore_flow_index,
+        "uncertainty_note": uncertainty_note,
         "nws_forecast_temp_f": round(float(nws_forecast_temp), 1) if nws_forecast_temp is not None else None,
         "blend_weight_used": blend_weight_used,
         "nws_forecast_note": nws_note,
@@ -751,7 +1005,7 @@ def estimate_daily_extremes(station_id, obs_limit=8):
 
         t0 = df["time"].iloc[0]
         elapsed_hours_all = (df["time"] - t0).dt.total_seconds() / 3600
-        pressure_trend, _ = _pressure_trend_and_uncertainty(df, elapsed_hours_all, 24)
+        pressure_trend, _, _ = _pressure_trend_and_uncertainty(df, elapsed_hours_all, 24)
         if pressure_trend is None:
             pressure_adj, tomorrow_confidence = 0.0, 45
         elif pressure_trend < -0.015:
@@ -931,16 +1185,17 @@ def backtest(station_id, hours_ahead=3, window_obs=8, lookback_days=5):
     estimate the temp at t + hours_ahead using only data up to t, and compare
     against the actual observation closest to t + hours_ahead.
 
-    The cross-station pressure gradient signal (get_pressure_gradient) IS
-    exercised here - real historical data exists for the upwind station too,
-    fetched once up front rather than re-fetched per rolling window. The NWS
-    hourly forecast blend is NOT: forecastHourly only exposes the forecast as
-    issued right now, so there's no way to ask what it would have said 3
-    hours before each historical point. Blending it in here would either
-    silently score today's forecast against past observations (meaningless)
-    or require fabricating a proxy forecast history - worse than just noting
-    the gap. See the live estimate for how much that signal actually moves
-    the point estimate.
+    The cross-station gradient network (get_pressure_gradient/
+    get_station_network_signals - coastal, strait, interior_gap) IS
+    exercised here - real historical data exists for all three roles too,
+    each fetched once up front rather than re-fetched per rolling window.
+    The NWS hourly forecast blend is NOT: forecastHourly only exposes the
+    forecast as issued right now, so there's no way to ask what it would
+    have said 3 hours before each historical point. Blending it in here
+    would either silently score today's forecast against past observations
+    (meaningless) or require fabricating a proxy forecast history - worse
+    than just noting the gap. See the live estimate for how much that
+    signal actually moves the point estimate.
 
     Returns a DataFrame of individual predictions plus a summary dict of
     error metrics (MAE, bias, RMSE).
@@ -956,6 +1211,29 @@ def backtest(station_id, hours_ahead=3, window_obs=8, lookback_days=5):
 
     upwind_df, upwind_station = _fetch_upwind_df(start - timedelta(minutes=20), end + timedelta(minutes=20))
     use_gradient = upwind_df is not None
+
+    # strait/interior_gap prefetch mirrors the coastal one above: fetch once
+    # for the whole window rather than per rolling slice. Gated on the same
+    # use_gradient (coastal availability) rather than tested independently -
+    # if the cross-station network is down entirely for this station's
+    # region, there's little value scoring the other two roles alone, and
+    # this keeps the "prefetch once, reuse for every window" performance
+    # property simple rather than adding three independent master switches.
+    strait_df = interior_df = None
+    strait_station = interior_station = None
+    if use_gradient:
+        strait_fetch, strait_station = _fetch_role_df(
+            "strait", start - timedelta(minutes=20), end + timedelta(minutes=20)
+        )
+        interior_fetch, interior_station = _fetch_role_df(
+            "interior_gap", start - timedelta(minutes=20), end + timedelta(minutes=20)
+        )
+        # False (not None) tells get_station_network_signals "already tried
+        # for this whole run, don't retry" - see its docstring - so hundreds
+        # of rolling-window calls don't each re-attempt and fail identically
+        # against the same down station.
+        strait_df = strait_fetch if strait_fetch is not None else False
+        interior_df = interior_fetch if interior_fetch is not None else False
 
     records = []
     for i in range(window_obs, len(full_df)):
@@ -977,6 +1255,7 @@ def backtest(station_id, hours_ahead=3, window_obs=8, lookback_days=5):
                 train_df, hours_ahead, lat, lon,
                 use_nws_forecast=False,
                 use_gradient=use_gradient, df_upwind=upwind_df,
+                df_strait=strait_df, df_interior_gap=interior_df,
             )
         except Exception:
             continue
@@ -997,6 +1276,8 @@ def backtest(station_id, hours_ahead=3, window_obs=8, lookback_days=5):
             "cloud_fraction": est["cloud_fraction"],
             "wind_mph": est["wind_mph"],
             "pressure_gradient_trend_inhg_per_hr": est["pressure_gradient_trend_inhg_per_hr"],
+            "marine_push_index": est["marine_push_index"],
+            "offshore_flow_index": est["offshore_flow_index"],
         })
 
     results_df = pd.DataFrame(records)
@@ -1015,6 +1296,16 @@ def backtest(station_id, hours_ahead=3, window_obs=8, lookback_days=5):
         "pct_within_uncertainty_band": round(results_df["within_band"].mean(), 2),
         "gradient_signal_used": use_gradient,
         "gradient_upwind_station": upwind_station,
+        "strait_station": strait_station,
+        "interior_gap_station": interior_station,
+        "mean_marine_push_index": (
+            round(results_df["marine_push_index"].dropna().mean(), 2)
+            if results_df["marine_push_index"].notna().any() else None
+        ),
+        "mean_offshore_flow_index": (
+            round(results_df["offshore_flow_index"].dropna().mean(), 2)
+            if results_df["offshore_flow_index"].notna().any() else None
+        ),
         "nws_forecast_note": (
             "not backtested - forecastHourly has no historical issue-time data; "
             "this signal only affects the point estimate, not the uncertainty band, "

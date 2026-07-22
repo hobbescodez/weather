@@ -14,6 +14,8 @@ from weather_estimator import (
     get_station_location,
     get_observation_history,
     get_sun_times,
+    MARINE_PUSH_INDEX_THRESHOLD,
+    OFFSHORE_FLOW_INDEX_THRESHOLD,
 )
 from kalshi import HIGH_SERIES, LOW_SERIES, get_market_for_date, get_event_hourly_volume, bracket_contains
 from calibration_log import record_snapshot
@@ -126,6 +128,22 @@ def pressure_chip(trend):
         return ("falling", "chip-warn")
     if trend > 0.015:
         return ("rising", "chip-good")
+    return ("steady", "chip-neutral")
+
+
+def index_chip(value, threshold, rising_label):
+    """Same shape as pressure_chip, for marine_push_index/offshore_flow_index
+    - "rising" (above threshold, chip-warn - matches _pressure_trend_and_
+    uncertainty's own threshold for widening uncertainty) means the pattern
+    is elevated enough to call out; "quiet" (below -threshold) means the
+    opposite pattern; otherwise "steady". None means the underlying station
+    was unavailable, not that the signal read zero."""
+    if value is None:
+        return ("no data", "chip-neutral")
+    if value > threshold:
+        return (rising_label, "chip-warn")
+    if value < -threshold:
+        return ("quiet", "chip-good")
     return ("steady", "chip-neutral")
 
 
@@ -357,7 +375,7 @@ def main():
     extremes = estimate_daily_extremes(STATION)
     lat, lon, _ = get_station_location(STATION)
 
-    record_snapshot(extremes)
+    record_snapshot(extremes, est=est)
 
     now = est["as_of"]
 
@@ -442,6 +460,17 @@ def main():
 
     p_label, p_class = pressure_chip(est["pressure_trend_inhg_per_hr"])
 
+    marine_push_label, marine_push_class = index_chip(est["marine_push_index"], MARINE_PUSH_INDEX_THRESHOLD, "rising")
+    offshore_flow_label, offshore_flow_class = index_chip(est["offshore_flow_index"], OFFSHORE_FLOW_INDEX_THRESHOLD, "rising")
+    strait_signal = est.get("strait_signal") or {}
+    interior_gap_signal = est.get("interior_gap_signal") or {}
+    marine_push_meta = f"via {strait_signal['station']}" if strait_signal.get("station") else "coastal only"
+    offshore_flow_meta = f"via {interior_gap_signal['station']}" if interior_gap_signal.get("station") else "no interior station available"
+    uncertainty_note_html = (
+        f'<div class="hint" style="margin-top: 6px;">Widened: {est["uncertainty_note"]}.</div>'
+        if est.get("uncertainty_note") else ""
+    )
+
     cloud_pct = est["cloud_fraction"]
     cloud_label = f"{round(cloud_pct * 100)}%" if cloud_pct is not None else "—"
     cloud_icon_svg = build_cloud_icon_svg(cloud_pct * 100 if cloud_pct is not None else None)
@@ -476,6 +505,13 @@ def main():
         "cloud_icon_svg": cloud_icon_svg,
         "pressure_label": p_label,
         "pressure_class": p_class,
+        "marine_push_label": marine_push_label,
+        "marine_push_class": marine_push_class,
+        "marine_push_meta": marine_push_meta,
+        "offshore_flow_label": offshore_flow_label,
+        "offshore_flow_class": offshore_flow_class,
+        "offshore_flow_meta": offshore_flow_meta,
+        "uncertainty_note_html": uncertainty_note_html,
         "confidence_pct": confidence_pct,
         "n_observations": est["n_observations"],
         "sparkline_svg": svg,
