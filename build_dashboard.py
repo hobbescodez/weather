@@ -90,7 +90,10 @@ def build_volume_bars_svg(hourly, tzinfo, width=640, height=190):
     visual language as the temperature sparkline. Every bar gets its own
     tick + hour label and a printed dollar estimate - this renders as a
     static image in most places it's viewed, so a hover-only <title>
-    tooltip alone isn't a reliable way to read the numbers."""
+    tooltip alone isn't a reliable way to read the numbers. The single
+    busiest hour (peak trading volume) is picked out in the accent color
+    with bold labels - otherwise it's just the tallest bar among many
+    similar ones, easy to skim past."""
     if not hourly:
         return '<div class="hint">No trades in this window yet.</div>'
 
@@ -99,6 +102,7 @@ def build_volume_bars_svg(hourly, tzinfo, width=640, height=190):
     # figure uses, so the chart matches what you'd see on their site.
     values = [h["contracts"] for h in hourly]
     max_val = max(max(values), 1.0)
+    peak_idx = values.index(max(values))
     n = len(hourly)
     gap = 3
     bar_w = max((width - 2 * pad_x - gap * (n - 1)) / n, 1)
@@ -113,13 +117,20 @@ def build_volume_bars_svg(hourly, tzinfo, width=640, height=190):
         hour_label = h["hour_end"].astimezone(tzinfo).strftime("%-I%p").lower()
         dollar_label = f"${h['dollars']/1000:.1f}k" if h["dollars"] >= 1000 else f"${h['dollars']:,.0f}"
 
+        is_peak = i == peak_idx and h["contracts"] > 0
+        bar_class = "volume-bar-peak" if is_peak else "volume-bar"
+        tick_class = "volume-tick-peak" if is_peak else "volume-tick"
+        hour_class = "volume-hour-label-peak" if is_peak else "volume-hour-label"
+        dollar_class = "volume-dollar-label-peak" if is_peak else "volume-dollar-label"
+        title_prefix = "Peak hour - " if is_peak else ""
+
         parts.append(
             f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{max(bar_h, 1):.1f}" '
-            f'class="volume-bar"><title>{hour_label}: {h["contracts"]:,.0f} contracts (≈${h["dollars"]:,.0f})</title></rect>'
-            f'<line x1="{cx:.1f}" y1="{baseline_y:.1f}" x2="{cx:.1f}" y2="{baseline_y + 4:.1f}" class="volume-tick" />'
-            f'<text x="{cx:.1f}" y="{baseline_y + 7:.1f}" class="volume-hour-label" '
+            f'class="{bar_class}"><title>{title_prefix}{hour_label}: {h["contracts"]:,.0f} contracts (≈${h["dollars"]:,.0f})</title></rect>'
+            f'<line x1="{cx:.1f}" y1="{baseline_y:.1f}" x2="{cx:.1f}" y2="{baseline_y + 4:.1f}" class="{tick_class}" />'
+            f'<text x="{cx:.1f}" y="{baseline_y + 7:.1f}" class="{hour_class}" '
             f'transform="rotate(-60 {cx:.1f} {baseline_y + 7:.1f})">{hour_label}</text>'
-            f'<text x="{cx:.1f}" y="{pad_top - 5:.1f}" class="volume-dollar-label" '
+            f'<text x="{cx:.1f}" y="{pad_top - 5:.1f}" class="{dollar_class}" '
             f'transform="rotate(-60 {cx:.1f} {pad_top - 5:.1f})">{dollar_label}</text>'
         )
 

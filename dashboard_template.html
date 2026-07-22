@@ -236,7 +236,7 @@
   }
 
   .volume-chart { width: 100%; height: auto; display: block; margin-top: 10px; }
-  .volume-bar { fill: var(--accent-warm-soft); }
+  .volume-bar { fill: var(--accent-warm-soft); opacity: 0.5; }
   .volume-tick { stroke: var(--text-faint); stroke-width: 1; }
   .volume-hour-label {
     font-size: 9px;
@@ -247,6 +247,24 @@
   .volume-dollar-label {
     font-size: 9px;
     fill: var(--text-soft);
+    text-anchor: start;
+    font-variant-numeric: tabular-nums;
+  }
+  /* The single busiest hour - made to stand out from the rest of the bars
+     rather than blending in as just the tallest one among many similar. */
+  .volume-bar-peak { fill: var(--accent-warm); opacity: 1; stroke: #fff; stroke-width: 1.5; }
+  .volume-tick-peak { stroke: var(--accent-warm); stroke-width: 1.5; }
+  .volume-hour-label-peak {
+    font-size: 10.5px;
+    font-weight: 700;
+    fill: var(--accent-warm);
+    text-anchor: end;
+    font-variant-numeric: tabular-nums;
+  }
+  .volume-dollar-label-peak {
+    font-size: 10.5px;
+    font-weight: 700;
+    fill: var(--accent-warm);
     text-anchor: start;
     font-variant-numeric: tabular-nums;
   }
