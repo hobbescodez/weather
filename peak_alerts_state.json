@@ -1,0 +1,24 @@
+{
+  "2026-07-21": {
+    "high": {
+      "predicted_peak_time_at_lock": "2026-07-21T16:19:00-07:00",
+      "target_alert_time": "2026-07-21T15:19:00-07:00",
+      "locked_at": "2026-07-21T22:53:00-07:00",
+      "sent": false,
+      "sent_at": null,
+      "message": null,
+      "skipped_missed_window": true
+    }
+  },
+  "2026-07-22": {
+    "low": {
+      "predicted_peak_time_at_lock": "2026-07-22T05:35:00-07:00",
+      "target_alert_time": "2026-07-22T04:35:00-07:00",
+      "locked_at": "2026-07-21T22:53:00-07:00",
+      "sent": false,
+      "sent_at": null,
+      "message": null,
+      "skipped_missed_window": false
+    }
+  }
+}

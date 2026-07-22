@@ -18,6 +18,7 @@ from weather_estimator import (
 from kalshi import HIGH_SERIES, LOW_SERIES, get_market_for_date, get_event_hourly_volume, bracket_contains
 from calibration_log import record_snapshot
 from daily_performance import finalize_pending_days, weekly_table, monthly_rollup
+from peak_alerts import get_or_lock_daily_targets
 
 STATION = "KSEA"
 HOURS_AHEAD = 3
@@ -325,6 +326,16 @@ def main():
         finalize_pending_days(STATION, lookback_days=7)
     except Exception as e:
         print(f"daily_performance: finalize_pending_days failed: {e}")
+
+    try:
+        lock_result = get_or_lock_daily_targets(STATION)
+        for date_str, side in lock_result["newly_locked"]:
+            side_state = lock_result["state"][date_str][side]
+            if not side_state["skipped_missed_window"]:
+                print(f"ALERT_SCHEDULE_NEEDED side={side} date={date_str} target_alert_time={side_state['target_alert_time']}")
+    except Exception as e:
+        print(f"peak_alerts: get_or_lock_daily_targets failed: {e}")
+
     weekly_perf = weekly_table(STATION, days=7)
     monthly_perf = monthly_rollup(STATION, now.year, now.month)
 
