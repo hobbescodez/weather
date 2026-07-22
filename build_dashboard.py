@@ -72,15 +72,16 @@ def build_sparkline_svg(times, temps, est_time, est_temp, width=640, height=160)
 """.strip()
 
 
-def build_volume_bars_svg(hourly, tzinfo, width=640, height=110):
-    """Bar chart of a Kalshi event's estimated dollar volume per hour, in
-    the same visual language as the temperature sparkline - so trading
-    activity reads as a shape (building up, tapering off) rather than a
-    wall of numbers."""
+def build_volume_bars_svg(hourly, tzinfo, width=640, height=190):
+    """Bar chart of a Kalshi event's contracts traded per hour, in the same
+    visual language as the temperature sparkline. Every bar gets its own
+    tick + hour label and a printed dollar estimate - this renders as a
+    static image in most places it's viewed, so a hover-only <title>
+    tooltip alone isn't a reliable way to read the numbers."""
     if not hourly:
         return '<div class="hint">No trades in this window yet.</div>'
 
-    pad_x, pad_top, pad_bottom = 4, 10, 18
+    pad_x, pad_top, pad_bottom = 4, 34, 42
     # Contracts, not dollars - this is the same unit Kalshi's own "Volume"
     # figure uses, so the chart matches what you'd see on their site.
     values = [h["contracts"] for h in hourly]
@@ -88,26 +89,31 @@ def build_volume_bars_svg(hourly, tzinfo, width=640, height=110):
     n = len(hourly)
     gap = 3
     bar_w = max((width - 2 * pad_x - gap * (n - 1)) / n, 1)
+    baseline_y = height - pad_bottom
 
-    bars = []
+    parts = []
     for i, h in enumerate(hourly):
-        bar_h = (height - pad_top - pad_bottom) * (h["contracts"] / max_val)
+        bar_h = (baseline_y - pad_top) * (h["contracts"] / max_val)
         x = pad_x + i * (bar_w + gap)
-        y = height - pad_bottom - bar_h
-        label = h["hour_end"].astimezone(tzinfo).strftime("%-I%p").lower()
-        bars.append(
+        y = baseline_y - bar_h
+        cx = x + bar_w / 2
+        hour_label = h["hour_end"].astimezone(tzinfo).strftime("%-I%p").lower()
+        dollar_label = f"${h['dollars']/1000:.1f}k" if h["dollars"] >= 1000 else f"${h['dollars']:,.0f}"
+
+        parts.append(
             f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{max(bar_h, 1):.1f}" '
-            f'class="volume-bar"><title>{label}: {h["contracts"]:,.0f} contracts (≈${h["dollars"]:,.0f})</title></rect>'
+            f'class="volume-bar"><title>{hour_label}: {h["contracts"]:,.0f} contracts (≈${h["dollars"]:,.0f})</title></rect>'
+            f'<line x1="{cx:.1f}" y1="{baseline_y:.1f}" x2="{cx:.1f}" y2="{baseline_y + 4:.1f}" class="volume-tick" />'
+            f'<text x="{cx:.1f}" y="{baseline_y + 7:.1f}" class="volume-hour-label" '
+            f'transform="rotate(-60 {cx:.1f} {baseline_y + 7:.1f})">{hour_label}</text>'
+            f'<text x="{cx:.1f}" y="{pad_top - 5:.1f}" class="volume-dollar-label" '
+            f'transform="rotate(-60 {cx:.1f} {pad_top - 5:.1f})">{dollar_label}</text>'
         )
 
-    first_label = hourly[0]["hour_end"].astimezone(tzinfo).strftime("%-I%p").lower()
-    last_label = hourly[-1]["hour_end"].astimezone(tzinfo).strftime("%-I%p").lower()
-
     return f"""
-<svg viewBox="0 0 {width} {height}" class="volume-chart" preserveAspectRatio="none" role="img" aria-label="Contracts traded per hour">
-  {"".join(bars)}
+<svg viewBox="0 0 {width} {height}" class="volume-chart" preserveAspectRatio="none" role="img" aria-label="Contracts and estimated dollars traded per hour">
+  {"".join(parts)}
 </svg>
-<div class="spark-caption"><span>{first_label}</span><span>{last_label}</span></div>
 """.strip()
 
 

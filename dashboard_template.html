@@ -229,6 +229,19 @@
 
   .volume-chart { width: 100%; height: auto; display: block; margin-top: 10px; }
   .volume-bar { fill: var(--accent-warm-soft); }
+  .volume-tick { stroke: var(--text-faint); stroke-width: 1; }
+  .volume-hour-label {
+    font-size: 9px;
+    fill: var(--text-faint);
+    text-anchor: end;
+    font-variant-numeric: tabular-nums;
+  }
+  .volume-dollar-label {
+    font-size: 9px;
+    fill: var(--text-soft);
+    text-anchor: start;
+    font-variant-numeric: tabular-nums;
+  }
 
   .hilo-detail-row {
     display: flex;

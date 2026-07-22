@@ -92,8 +92,11 @@ def get_event_hourly_volume(series_ticker, brackets, hours=24):
     over an event's full lifetime rather than just one hour).
 
     An hour with zero trades has no "price" data at all (checked directly
-    against the API), so those are skipped rather than treated as $0 at a
-    real price.
+    against the API), so those contribute $0/0 contracts rather than being
+    read as a real trade at a real price. They're still included as an
+    hour with zero volume, though - every hour in the window gets a slot,
+    even a quiet one, so the chart's time axis stays evenly spaced instead
+    of silently skipping gaps.
     """
     end_ts = int(time.time())
     start_ts = end_ts - hours * 3600
@@ -106,15 +109,23 @@ def get_event_hourly_volume(series_ticker, brackets, hours=24):
         )
         r.raise_for_status()
         for c in r.json()["candlesticks"]:
+            bucket = buckets.setdefault(c["end_period_ts"], {"contracts": 0.0, "dollars": 0.0})
             contracts = float(c["volume_fp"])
             if contracts <= 0:
                 continue
             mean_price = c["price"].get("mean_dollars")
             if mean_price is None:
                 continue
-            bucket = buckets.setdefault(c["end_period_ts"], {"contracts": 0.0, "dollars": 0.0})
             bucket["contracts"] += contracts
             bucket["dollars"] += contracts * float(mean_price)
+
+    # Fill in any hour boundary in the window with no candlestick at all
+    # (e.g. a bracket with no trading history yet) so every hour still
+    # gets a zero-volume slot instead of vanishing from the timeline.
+    first_hour = (start_ts // 3600 + 1) * 3600
+    last_hour = (end_ts // 3600) * 3600
+    for ts in range(first_hour, last_hour + 1, 3600):
+        buckets.setdefault(ts, {"contracts": 0.0, "dollars": 0.0})
 
     hourly = [
         {
