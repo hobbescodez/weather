@@ -59,7 +59,9 @@ def record_snapshot(extremes, est=None):
         "observed_low_so_far_f": extremes["observed_low_so_far_f"],
         "observed_low_so_far_time": extremes["observed_low_so_far_time"].isoformat(),
         "tomorrow_high_f": extremes["tomorrow_high_f"],
+        "tomorrow_high_source": extremes["tomorrow_high_source"],
         "tomorrow_low_f": extremes["tomorrow_low_f"],
+        "tomorrow_low_source": extremes["tomorrow_low_source"],
         "pressure_gradient_station": est["pressure_gradient_station"] if est else None,
         "pressure_gradient_inhg": est["pressure_gradient_inhg"] if est else None,
         "pressure_gradient_trend_inhg_per_hr": est["pressure_gradient_trend_inhg_per_hr"] if est else None,
@@ -182,6 +184,10 @@ def summarize():
             )
         tomorrow_high_forecast = day_rows[-1]["tomorrow_high_f"]
         tomorrow_low_forecast = day_rows[-1]["tomorrow_low_f"]
+        # Older rows predate this field - .get() so summarize() doesn't
+        # break replaying an existing log.
+        tomorrow_high_source = day_rows[-1].get("tomorrow_high_source")
+        tomorrow_low_source = day_rows[-1].get("tomorrow_low_source")
 
         def err(pred, actual):
             return round(pred - actual, 2) if pred is not None and actual is not None else None
@@ -193,9 +199,11 @@ def summarize():
             "same_day_low": {"projection": last_low_projection, "final": final_low,
                               "error": err(last_low_projection, final_low)},
             "next_day_high": {"projection": tomorrow_high_forecast, "final": next_final_high,
-                               "error": err(tomorrow_high_forecast, next_final_high)},
+                               "error": err(tomorrow_high_forecast, next_final_high),
+                               "source": tomorrow_high_source},
             "next_day_low": {"projection": tomorrow_low_forecast, "final": next_final_low,
-                              "error": err(tomorrow_low_forecast, next_final_low)},
+                              "error": err(tomorrow_low_forecast, next_final_low),
+                              "source": tomorrow_low_source},
         })
 
     return {
@@ -204,6 +212,78 @@ def summarize():
         "same_day_low_stats": _stats([d["same_day_low"]["error"] for d in days if d["same_day_low"]["error"] is not None]),
         "next_day_high_stats": _stats([d["next_day_high"]["error"] for d in days if d["next_day_high"]["error"] is not None]),
         "next_day_low_stats": _stats([d["next_day_low"]["error"] for d in days if d["next_day_low"]["error"] is not None]),
+    }
+
+
+# build_dashboard.py's "tomorrow's high/low" confidence % used to be a
+# hand-picked constant (75 for an NWS-forecast-grounded guess, 35-55 for
+# the weaker persistence fallback - see weather_estimator.py's
+# estimate_daily_extremes) with UI copy promising it "will switch to a
+# measured number once enough days accumulate." Nothing ever computed that
+# measured number - the promise was aspirational copy, not a real
+# mechanism. next_day_confidence_pct below is that mechanism.
+#
+# Split by source (nws_forecast vs persistence_fallback) rather than one
+# pooled MAE across both: the two paths have very different expected
+# accuracy (that's the whole reason the UI distinguishes them), and
+# persistence_fallback triggers rarely, so pooling would let mostly-
+# nws_forecast days quietly stand in for a persistence-fallback day's own,
+# probably worse, real track record.
+MIN_NEXT_DAY_SAMPLES = 10  # modest but more than daily_performance.py's 5-day "low_sample" rollup threshold, since this feeds a headline UI number rather than an internal average
+
+# First-pass MAE -> confidence-percent mapping - not a calibrated
+# probability, just a monotonic "smaller error -> more confidence"
+# translation, deliberately scaled so it lines up with the constants it's
+# replacing (75 for the forecast path, 35-55 for persistence) rather than
+# jumping to a wildly different number the day it switches on. Revisit
+# this formula itself once real data shows whether it over- or
+# understates confidence relative to how often next-day temps actually
+# land close to the forecast - same "don't trust hand-picked constants
+# forever" principle as PEAK_HEAT_FRACTION and the paper-trading sigma.
+_CONFIDENCE_MAX_PCT = 90
+_CONFIDENCE_MIN_PCT = 30
+_CONFIDENCE_PCT_PER_DEGREE_MAE = 10
+
+
+def _mae_to_confidence_pct(mae_f):
+    pct = _CONFIDENCE_MAX_PCT - _CONFIDENCE_PCT_PER_DEGREE_MAE * mae_f
+    return round(max(_CONFIDENCE_MIN_PCT, min(_CONFIDENCE_MAX_PCT, pct)))
+
+
+def next_day_confidence_pct(source_high, source_low, min_samples=MIN_NEXT_DAY_SAMPLES):
+    """
+    Measured next-day confidence for each side, source-matched: only
+    finalized days whose tomorrow_high_f/tomorrow_low_f came from the SAME
+    source (source_high/source_low - typically today's own
+    extremes["tomorrow_high_source"]/["tomorrow_low_source"]) count toward
+    that side's sample, so a forecast-grounded day never gets padded out
+    by persistence-fallback days' track record or vice versa.
+
+    Returns {"high": pct_or_None, "low": pct_or_None, "n_high": n, "n_low":
+    n}. A None pct means fewer than min_samples matching days exist yet -
+    the caller should keep showing its own source-based placeholder
+    (see build_dashboard.py's TOMORROW_HINTS) rather than a number this
+    thin could support.
+    """
+    days = summarize()["days"]
+
+    high_errors = [
+        d["next_day_high"]["error"] for d in days
+        if d["next_day_high"]["error"] is not None and d["next_day_high"]["source"] == source_high
+    ]
+    low_errors = [
+        d["next_day_low"]["error"] for d in days
+        if d["next_day_low"]["error"] is not None and d["next_day_low"]["source"] == source_low
+    ]
+
+    high_stats = _stats(high_errors)
+    low_stats = _stats(low_errors)
+
+    return {
+        "high": _mae_to_confidence_pct(high_stats["mae_f"]) if high_stats and high_stats["n"] >= min_samples else None,
+        "low": _mae_to_confidence_pct(low_stats["mae_f"]) if low_stats and low_stats["n"] >= min_samples else None,
+        "n_high": high_stats["n"] if high_stats else 0,
+        "n_low": low_stats["n"] if low_stats else 0,
     }
 
 

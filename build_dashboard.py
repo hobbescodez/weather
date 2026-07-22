@@ -18,7 +18,7 @@ from weather_estimator import (
     OFFSHORE_FLOW_INDEX_THRESHOLD,
 )
 from kalshi import HIGH_SERIES, LOW_SERIES, get_market_for_date, get_event_hourly_volume, bracket_contains
-from calibration_log import record_snapshot
+from calibration_log import record_snapshot, next_day_confidence_pct, MIN_NEXT_DAY_SAMPLES
 from daily_performance import finalize_pending_days, weekly_table, monthly_rollup
 from peak_alerts import get_or_lock_daily_targets
 
@@ -346,10 +346,35 @@ HIGH_CAPTIONS = {
     "observed": "today's high so far",
     "projected": "projected for today's peak-heat hour",
 }
-TOMORROW_HINTS = {
-    "nws_forecast": "From the NWS hourly forecast (HRRR model) - real atmospheric dynamics, not this tool's own trend/persistence guess. The reference confidence % is a placeholder, not a backtested figure - calibration_log.py is tracking real next-day accuracy and this will switch to a measured number once enough days accumulate.",
-    "persistence_fallback": "NWS forecast unavailable - falling back to a persistence guess (today's/yesterday's high, nudged by pressure trend). The reference confidence % is a placeholder reflecting that this fallback is weaker than the forecast path, not a backtested figure - a single station's short trend can't see a full day ahead.",
+TOMORROW_SOURCE_BLURB = {
+    "nws_forecast": "From the NWS hourly forecast (HRRR model) - real atmospheric dynamics, not this tool's own trend/persistence guess.",
+    "persistence_fallback": "NWS forecast unavailable - falling back to a persistence guess (today's/yesterday's high, nudged by pressure trend).",
 }
+
+
+def tomorrow_hint(source, measured_pct, n_samples, min_samples=MIN_NEXT_DAY_SAMPLES):
+    """
+    measured_pct/n_samples: see calibration_log.next_day_confidence_pct.
+    The confidence % shown next to "tomorrow's high/low" used to be a
+    hand-picked constant with copy promising it "will switch to a measured
+    number once enough days accumulate" - nothing ever computed that
+    number, so the promise was aspirational copy, not a real feature. This
+    reports the actual state instead: a measured figure once
+    next_day_confidence_pct has enough source-matched samples, otherwise
+    an honest placeholder that says how many of the needed samples exist
+    so far.
+    """
+    base = TOMORROW_SOURCE_BLURB[source]
+    if measured_pct is not None:
+        return (
+            f"{base} Reference confidence is measured from the last {n_samples} finalized "
+            f"next-day predictions using this same source (calibration_log.py) - not a placeholder."
+        )
+    return (
+        f"{base} The reference confidence % is still a placeholder, not a backtested figure - "
+        f"only {n_samples} of {min_samples} finalized next-day predictions using this source are "
+        f"logged so far; this will switch to a measured number once enough accumulate."
+    )
 LOW_CAPTIONS = {
     "today": "today's overnight low, almost here",
     "tonight": "expected low tonight",
@@ -447,6 +472,19 @@ def main():
         print(f"Kalshi tomorrow low volume fetch failed: {e}")
         tomorrow_low_volume = None
 
+    try:
+        measured_conf = next_day_confidence_pct(extremes["tomorrow_high_source"], extremes["tomorrow_low_source"])
+    except Exception as e:
+        print(f"calibration_log: next_day_confidence_pct failed: {e}")
+        measured_conf = {"high": None, "low": None, "n_high": 0, "n_low": 0}
+
+    tomorrow_high_confidence_pct = (
+        measured_conf["high"] if measured_conf["high"] is not None else extremes["tomorrow_high_confidence_pct"]
+    )
+    tomorrow_low_confidence_pct = (
+        measured_conf["low"] if measured_conf["low"] is not None else extremes["tomorrow_low_confidence_pct"]
+    )
+
     window_start = now - timedelta(hours=SPARKLINE_HOURS)
     hist = get_observation_history(STATION, start=window_start, end=now)
 
@@ -528,21 +566,21 @@ def main():
         "observed_low": f"{extremes['observed_low_so_far_f']:.2f}",
         "observed_low_time": _fmt_time(extremes["observed_low_so_far_time"]),
         "tomorrow_high": f"{extremes['tomorrow_high_f']:.2f}",
-        "tomorrow_confidence_pct": extremes["tomorrow_high_confidence_pct"],
+        "tomorrow_confidence_pct": tomorrow_high_confidence_pct,
         "tomorrow_meta": (
-            f"~{_fmt_time(extremes['tomorrow_high_time'])} · reference confidence {extremes['tomorrow_high_confidence_pct']}%*"
+            f"~{_fmt_time(extremes['tomorrow_high_time'])} · reference confidence {tomorrow_high_confidence_pct}%*"
             if extremes["tomorrow_high_time"] is not None
-            else f"reference confidence {extremes['tomorrow_high_confidence_pct']}%*"
+            else f"reference confidence {tomorrow_high_confidence_pct}%*"
         ),
-        "tomorrow_hint": TOMORROW_HINTS[extremes["tomorrow_high_source"]],
+        "tomorrow_hint": tomorrow_hint(extremes["tomorrow_high_source"], measured_conf["high"], measured_conf["n_high"]),
         "tomorrow_low": f"{extremes['tomorrow_low_f']:.2f}",
-        "tomorrow_low_confidence_pct": extremes["tomorrow_low_confidence_pct"],
+        "tomorrow_low_confidence_pct": tomorrow_low_confidence_pct,
         "tomorrow_low_meta": (
-            f"~{_fmt_time(extremes['tomorrow_low_time'])} · reference confidence {extremes['tomorrow_low_confidence_pct']}%*"
+            f"~{_fmt_time(extremes['tomorrow_low_time'])} · reference confidence {tomorrow_low_confidence_pct}%*"
             if extremes["tomorrow_low_time"] is not None
-            else f"reference confidence {extremes['tomorrow_low_confidence_pct']}%*"
+            else f"reference confidence {tomorrow_low_confidence_pct}%*"
         ),
-        "tomorrow_low_hint": TOMORROW_HINTS[extremes["tomorrow_low_source"]],
+        "tomorrow_low_hint": tomorrow_hint(extremes["tomorrow_low_source"], measured_conf["low"], measured_conf["n_low"]),
         "yesterday_high": f"{extremes['yesterday_high_f']:.2f}" if extremes["yesterday_high_f"] is not None else "—",
         "yesterday_high_time": _fmt_time(extremes["yesterday_high_time"]) if extremes["yesterday_high_time"] is not None else "—",
         "yesterday_low": f"{extremes['yesterday_low_f']:.2f}" if extremes["yesterday_low_f"] is not None else "—",
