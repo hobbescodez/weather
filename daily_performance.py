@@ -93,7 +93,7 @@ def _full_day_actuals(station_id, day):
     midnight-to-midnight observation query - not reused from
     calibration_log's intraday "so far" snapshots, so it isn't affected
     by which moments happened to get logged that day."""
-    tzinfo = get_observation_history(station_id, limit=1)["time"].iloc[0].tzinfo
+    tzinfo = get_observation_history(station_id, limit=5)["time"].iloc[0].tzinfo
     start = datetime.combine(day, time(0, 0), tzinfo=tzinfo)
     end = start + timedelta(days=1)
     df = get_observation_history(station_id, start=start, end=end)
@@ -317,7 +317,7 @@ def finalize_day(station_id, day):
     if _already_finalized(station_id, date_str):
         return None
 
-    sample = get_observation_history(station_id, limit=1)
+    sample = get_observation_history(station_id, limit=5)
     tzinfo = sample["time"].iloc[0].tzinfo
     today_local = datetime.now(tzinfo).date()
     if day >= today_local:
@@ -347,7 +347,7 @@ def finalize_day(station_id, day):
 def finalize_pending_days(station_id, lookback_days=7):
     """Catches up on any completed-but-not-yet-finalized days in the
     trailing window - safe to call on every dashboard refresh."""
-    sample = get_observation_history(station_id, limit=1)
+    sample = get_observation_history(station_id, limit=5)
     tzinfo = sample["time"].iloc[0].tzinfo
     today_local = datetime.now(tzinfo).date()
 
@@ -375,7 +375,7 @@ def weekly_table(station_id, days=7):
     7 days" instead of silently presenting a partial week as if it were
     complete.
     """
-    sample = get_observation_history(station_id, limit=1)
+    sample = get_observation_history(station_id, limit=5)
     tzinfo = sample["time"].iloc[0].tzinfo
     today_local = datetime.now(tzinfo).date()
 

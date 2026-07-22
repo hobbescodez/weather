@@ -148,9 +148,9 @@ def get_observation_history(station_id, limit=8, start=None, end=None):
             "cloud_fraction": _cloud_fraction(cloud_layers),
         })
 
-    df = pd.DataFrame(rows).sort_values("time").reset_index(drop=True)
-    if df.empty:
+    if not rows:
         raise ValueError("No valid temperature readings for the requested window.")
+    df = pd.DataFrame(rows).sort_values("time").reset_index(drop=True)
     return df
 
 
