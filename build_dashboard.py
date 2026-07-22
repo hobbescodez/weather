@@ -221,8 +221,8 @@ HIGH_CAPTIONS = {
     "projected": "projected for today's peak-heat hour",
 }
 TOMORROW_HINTS = {
-    "nws_forecast": "From the NWS hourly forecast (HRRR model) - real atmospheric dynamics, not this tool's own trend/persistence guess.",
-    "persistence_fallback": "NWS forecast unavailable - falling back to a persistence guess (today's/yesterday's high, nudged by pressure trend). Confidence is capped low on purpose; a single station's short trend can't see a full day ahead.",
+    "nws_forecast": "From the NWS hourly forecast (HRRR model) - real atmospheric dynamics, not this tool's own trend/persistence guess. The reference confidence % is a placeholder, not a backtested figure - calibration_log.py is tracking real next-day accuracy and this will switch to a measured number once enough days accumulate.",
+    "persistence_fallback": "NWS forecast unavailable - falling back to a persistence guess (today's/yesterday's high, nudged by pressure trend). The reference confidence % is a placeholder reflecting that this fallback is weaker than the forecast path, not a backtested figure - a single station's short trend can't see a full day ahead.",
 }
 LOW_CAPTIONS = {
     "today": "today's overnight low, almost here",
@@ -368,17 +368,17 @@ def main():
         "tomorrow_high": f"{extremes['tomorrow_high_f']:.2f}",
         "tomorrow_confidence_pct": extremes["tomorrow_high_confidence_pct"],
         "tomorrow_meta": (
-            f"~{_fmt_time(extremes['tomorrow_high_time'])} · confidence {extremes['tomorrow_high_confidence_pct']}%"
+            f"~{_fmt_time(extremes['tomorrow_high_time'])} · reference confidence {extremes['tomorrow_high_confidence_pct']}%*"
             if extremes["tomorrow_high_time"] is not None
-            else f"confidence {extremes['tomorrow_high_confidence_pct']}%"
+            else f"reference confidence {extremes['tomorrow_high_confidence_pct']}%*"
         ),
         "tomorrow_hint": TOMORROW_HINTS[extremes["tomorrow_high_source"]],
         "tomorrow_low": f"{extremes['tomorrow_low_f']:.2f}",
         "tomorrow_low_confidence_pct": extremes["tomorrow_low_confidence_pct"],
         "tomorrow_low_meta": (
-            f"~{_fmt_time(extremes['tomorrow_low_time'])} · confidence {extremes['tomorrow_low_confidence_pct']}%"
+            f"~{_fmt_time(extremes['tomorrow_low_time'])} · reference confidence {extremes['tomorrow_low_confidence_pct']}%*"
             if extremes["tomorrow_low_time"] is not None
-            else f"confidence {extremes['tomorrow_low_confidence_pct']}%"
+            else f"reference confidence {extremes['tomorrow_low_confidence_pct']}%*"
         ),
         "tomorrow_low_hint": TOMORROW_HINTS[extremes["tomorrow_low_source"]],
         "yesterday_high": f"{extremes['yesterday_high_f']:.2f}" if extremes["yesterday_high_f"] is not None else "—",
