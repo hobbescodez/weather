@@ -19,6 +19,15 @@
       "sent_at": null,
       "message": null,
       "skipped_missed_window": false
+    },
+    "high": {
+      "predicted_peak_time_at_lock": "2026-07-22T16:19:00-07:00",
+      "target_alert_time": "2026-07-22T15:19:00-07:00",
+      "locked_at": "2026-07-22T00:53:00-07:00",
+      "sent": false,
+      "sent_at": null,
+      "message": null,
+      "skipped_missed_window": false
     }
   }
 }
