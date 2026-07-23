@@ -1,26 +1,37 @@
 name: Refresh KSEA Dashboard
 
-# Regenerates docs/index.html (served by GitHub Pages) from live data every
-# hour. No repo secrets are configured or needed here: api.weather.gov and
-# Kalshi's public market API both work fully unauthenticated - see
+# Regenerates docs/index.html (served by GitHub Pages) from live data. No
+# repo secrets are configured or needed here: api.weather.gov and Kalshi's
+# public market API both work fully unauthenticated - see
 # build_dashboard.py / kalshi.py. If SMS alerting (peak_alerts.py, Twilio)
 # is ever wired into Actions later, THAT would need TWILIO_ACCOUNT_SID /
 # TWILIO_AUTH_TOKEN / TWILIO_FROM_NUMBER / ALERT_PHONE_NUMBER as real repo
 # secrets - it is deliberately not part of this workflow.
+#
+# No `schedule:` trigger: GitHub's own scheduled-workflow cron went
+# unfired for hours after this workflow was first added (confirmed via
+# the Actions run history - zero scheduled runs, only a manual
+# workflow_dispatch actually ran), a known reliability gap with GitHub
+# Actions' `schedule` event, not something fixable from the workflow
+# file itself. docs/index.html is instead kept fresh by the existing
+# hourly process that already regenerates the claude.ai-hosted mirror of
+# this dashboard and commits the small JSON/JSONL data logs - it now
+# commits docs/index.html too, hourly, reliably, from outside GitHub's
+# own (unreliable) scheduler. workflow_dispatch is kept here for
+# on-demand manual runs/testing.
 #
 # This workflow only commits docs/index.html. build_dashboard.py also
 # writes to a handful of small JSON/JSONL data logs (calibration_log.jsonl,
 # daily_performance.jsonl, peak_alerts_state.json, paper_trades_pending.json,
 # paper_trading_2hr_schedule.json) as a side effect of computing the
 # current snapshot - those edits are left uncommitted and discarded when
-# the runner is torn down, since a separate, existing process already owns
-# committing that data. Committing it from here too would double-log every
-# hour and risk racing that other process's own pushes to the same files.
+# the runner is torn down, since the process described above already owns
+# committing that data. Committing it from here too would double-log
+# every run and risk racing that other process's own pushes to the same
+# files.
 
 on:
-  schedule:
-    - cron: "0 * * * *" # hourly, on the hour (UTC)
-  workflow_dispatch: {} # lets you trigger a run manually from the Actions tab
+  workflow_dispatch: {} # trigger a run manually from the Actions tab
 
 permissions:
   contents: write # needed to commit docs/index.html back to the repo
@@ -47,15 +58,40 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # build_dashboard.py also writes to the JSON/JSONL data logs as a
+          # side effect (see the note above) - discard those working-tree
+          # changes before committing. Leaving them dirty makes `git pull
+          # --rebase` below refuse to run at all ("cannot pull with rebase:
+          # you have unstaged changes") - confirmed the hard way: an earlier
+          # version of this step committed docs/index.html locally, then
+          # failed to push 3/3 times for exactly this reason, and the retry
+          # loop's own bug (see below) reported success anyway.
+          git checkout -- calibration_log.jsonl daily_performance.jsonl \
+            peak_alerts_state.json paper_trades_pending.json \
+            paper_trading_2hr_schedule.json 2>/dev/null || true
+
           git add docs/index.html
           if git diff --cached --quiet; then
             echo "No changes to commit."
             exit 0
           fi
           git commit -m "Automated hourly dashboard refresh"
+
+          pushed=false
           for i in 1 2 3; do
-            git pull --rebase origin "${{ github.ref_name }}" && \
-            git push origin HEAD:"${{ github.ref_name }}" && break
+            if git pull --rebase origin "${{ github.ref_name }}" && \
+               git push origin HEAD:"${{ github.ref_name }}"; then
+              pushed=true
+              break
+            fi
             echo "Push attempt $i failed, retrying..."
             sleep 5
           done
+          # Without this, the loop's last command on a fully-exhausted retry
+          # is `sleep 5`, which always exits 0 - so the step reported
+          # success even on 3/3 push failures. Fail loudly instead.
+          if [ "$pushed" != true ]; then
+            echo "::error::Failed to push docs/index.html after 3 attempts."
+            exit 1
+          fi
