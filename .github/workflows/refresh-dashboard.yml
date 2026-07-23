@@ -1,0 +1,61 @@
+name: Refresh KSEA Dashboard
+
+# Regenerates docs/index.html (served by GitHub Pages) from live data every
+# hour. No repo secrets are configured or needed here: api.weather.gov and
+# Kalshi's public market API both work fully unauthenticated - see
+# build_dashboard.py / kalshi.py. If SMS alerting (peak_alerts.py, Twilio)
+# is ever wired into Actions later, THAT would need TWILIO_ACCOUNT_SID /
+# TWILIO_AUTH_TOKEN / TWILIO_FROM_NUMBER / ALERT_PHONE_NUMBER as real repo
+# secrets - it is deliberately not part of this workflow.
+#
+# This workflow only commits docs/index.html. build_dashboard.py also
+# writes to a handful of small JSON/JSONL data logs (calibration_log.jsonl,
+# daily_performance.jsonl, peak_alerts_state.json, paper_trades_pending.json,
+# paper_trading_2hr_schedule.json) as a side effect of computing the
+# current snapshot - those edits are left uncommitted and discarded when
+# the runner is torn down, since a separate, existing process already owns
+# committing that data. Committing it from here too would double-log every
+# hour and risk racing that other process's own pushes to the same files.
+
+on:
+  schedule:
+    - cron: "0 * * * *" # hourly, on the hour (UTC)
+  workflow_dispatch: {} # lets you trigger a run manually from the Actions tab
+
+permissions:
+  contents: write # needed to commit docs/index.html back to the repo
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests pandas numpy astral
+
+      - name: Build dashboard
+        run: python3 build_dashboard.py
+
+      - name: Commit and push docs/index.html if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/index.html
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Automated hourly dashboard refresh"
+          for i in 1 2 3; do
+            git pull --rebase origin "${{ github.ref_name }}" && \
+            git push origin HEAD:"${{ github.ref_name }}" && break
+            echo "Push attempt $i failed, retrying..."
+            sleep 5
+          done

@@ -1,0 +1,801 @@
+<title>KSEA — Sea-Tac Weather</title>
+<style>
+  :root {
+    --text-strong: #ffffff;
+    --text-soft: rgba(255, 255, 255, 0.82);
+    --text-faint: rgba(255, 255, 255, 0.56);
+    --accent-warm: #ffd60a;
+    --accent-warm-soft: rgba(255, 214, 10, 0.85);
+    --glass-bg: rgba(255, 255, 255, 0.15);
+    --glass-bg-strong: rgba(255, 255, 255, 0.22);
+    --glass-border: rgba(255, 255, 255, 0.26);
+    --glass-line: rgba(255, 255, 255, 0.2);
+  }
+
+  * { box-sizing: border-box; }
+
+  .scene {
+    position: relative;
+    min-height: 100vh;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    padding: 52px 18px 40px;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text-strong);
+  }
+
+  /* Sky variants are picked at generation time from the station's real
+     cloud cover and whether it's currently day or night there - the
+     backdrop is a live fact about the sky, not decoration. */
+  .scene[data-sky="day-clear"] {
+    background: linear-gradient(175deg, #1c7fe0 0%, #4aa3ec 42%, #8ed2f7 100%);
+  }
+  .scene[data-sky="day-cloudy"] {
+    background: linear-gradient(175deg, #64748a 0%, #8794a6 45%, #b8c3cd 100%);
+  }
+  .scene[data-sky="night-clear"] {
+    background: linear-gradient(175deg, #050a1e 0%, #101a3c 45%, #263a68 100%);
+  }
+  .scene[data-sky="night-cloudy"] {
+    background: linear-gradient(175deg, #191c24 0%, #2a2e39 45%, #3d434f 100%);
+  }
+
+  .scene::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .scene[data-sky="day-clear"]::before {
+    background: radial-gradient(circle at 80% 6%, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0) 34%);
+  }
+
+  .scene[data-sky="night-clear"]::before {
+    background-image:
+      radial-gradient(1.4px 1.4px at 18% 12%, rgba(255, 255, 255, 0.85), transparent),
+      radial-gradient(1px 1px at 68% 8%, rgba(255, 255, 255, 0.6), transparent),
+      radial-gradient(1.4px 1.4px at 84% 22%, rgba(255, 255, 255, 0.75), transparent),
+      radial-gradient(1px 1px at 38% 5%, rgba(255, 255, 255, 0.5), transparent),
+      radial-gradient(1.4px 1.4px at 54% 16%, rgba(255, 255, 255, 0.65), transparent),
+      radial-gradient(1px 1px at 8% 26%, rgba(255, 255, 255, 0.5), transparent),
+      radial-gradient(1.4px 1.4px at 93% 14%, rgba(255, 255, 255, 0.7), transparent),
+      radial-gradient(1px 1px at 28% 20%, rgba(255, 255, 255, 0.45), transparent),
+      radial-gradient(1px 1px at 62% 28%, rgba(255, 255, 255, 0.4), transparent);
+  }
+
+  .content {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 430px;
+    display: flex;
+    flex-direction: column;
+    gap: 26px;
+  }
+
+  .place { text-align: center; }
+  .place-eyebrow {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+  }
+  .place-name {
+    font-size: 21px;
+    font-weight: 500;
+    margin-top: 4px;
+    text-wrap: balance;
+  }
+  .place-updated {
+    font-size: 12.5px;
+    color: var(--text-faint);
+    margin-top: 5px;
+  }
+
+  .hero { text-align: center; }
+  .hero-condition {
+    font-size: 17px;
+    font-weight: 400;
+    color: var(--text-soft);
+  }
+  .hero-temp {
+    font-size: clamp(84px, 25vw, 116px);
+    font-weight: 200;
+    line-height: 0.95;
+    letter-spacing: -2px;
+    font-variant-numeric: tabular-nums;
+  }
+  .hero-temp sup {
+    font-size: 0.3em;
+    font-weight: 300;
+    top: -0.65em;
+  }
+  .hero-hilo {
+    margin-top: 4px;
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    font-size: 16px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-strong);
+  }
+  .hilo-arrow-high { color: var(--accent-warm); }
+  .hilo-arrow-low { color: var(--text-soft); }
+  .dot-warm {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent-warm);
+    margin-right: 7px;
+    vertical-align: middle;
+  }
+
+  .glass {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 20px;
+    padding: 18px 20px;
+    backdrop-filter: blur(24px) saturate(150%);
+    -webkit-backdrop-filter: blur(24px) saturate(150%);
+  }
+
+  .module-label {
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: 12px;
+  }
+
+  .estimate-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .estimate-value {
+    font-size: 30px;
+    font-weight: 500;
+    color: var(--text-strong);
+    font-variant-numeric: tabular-nums;
+  }
+  .estimate-label {
+    font-size: 13px;
+    color: var(--text-soft);
+    text-align: right;
+  }
+
+  .range-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 14px;
+  }
+  .range-label {
+    font-size: 12px;
+    color: var(--text-faint);
+  }
+  .range-values {
+    font-size: 13px;
+    color: var(--text-soft);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .hint {
+    font-size: 11.5px;
+    color: var(--text-faint);
+    line-height: 1.4;
+    margin-top: 6px;
+  }
+
+  .confidence-bar {
+    position: relative;
+    height: 6px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.18);
+    margin-top: 10px;
+    overflow: hidden;
+  }
+  .confidence-fill {
+    position: absolute;
+    top: 0; left: 0; height: 100%;
+    border-radius: 4px;
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.6), var(--accent-warm));
+  }
+
+  .sparkline { width: 100%; height: auto; display: block; margin-top: 4px; }
+  .spark-area { fill: rgba(255, 255, 255, 0.16); }
+  .spark-line { fill: none; stroke: rgba(255, 255, 255, 0.85); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+  .spark-proj { fill: none; stroke: var(--accent-warm); stroke-width: 2.5; stroke-linecap: round; stroke-dasharray: 1 7; }
+  .spark-now-dot { fill: rgba(20, 30, 50, 0.4); stroke: #fff; stroke-width: 2; }
+  .spark-est-dot-halo { fill: var(--accent-warm); opacity: 0.28; }
+  .spark-est-dot { fill: var(--accent-warm); stroke: #fff; stroke-width: 2; }
+  .spark-est-guide { stroke: var(--accent-warm); stroke-width: 1; stroke-dasharray: 2 3; opacity: 0.5; }
+  .spark-est-label { fill: var(--accent-warm); font-size: 13px; font-weight: 700; }
+
+  .spark-caption {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11.5px;
+    color: var(--text-faint);
+    margin-top: 6px;
+  }
+  .spark-caption-target {
+    font-weight: 700;
+    color: var(--accent-warm);
+    font-size: 12.5px;
+  }
+
+  .volume-chart { width: 100%; height: auto; display: block; margin-top: 10px; }
+  .volume-bar { fill: var(--accent-warm-soft); opacity: 0.5; }
+  .volume-tick { stroke: var(--text-faint); stroke-width: 1; }
+  .volume-hour-label {
+    font-size: 9px;
+    fill: var(--text-faint);
+    text-anchor: end;
+    font-variant-numeric: tabular-nums;
+  }
+  .volume-dollar-label {
+    font-size: 9px;
+    fill: var(--text-soft);
+    text-anchor: start;
+    font-variant-numeric: tabular-nums;
+  }
+  /* The single busiest hour - made to stand out from the rest of the bars
+     rather than blending in as just the tallest one among many similar. */
+  .volume-bar-peak { fill: var(--accent-warm); opacity: 1; stroke: #fff; stroke-width: 1.5; }
+  .volume-tick-peak { stroke: var(--accent-warm); stroke-width: 1.5; }
+  .volume-hour-label-peak {
+    font-size: 10.5px;
+    font-weight: 700;
+    fill: var(--accent-warm);
+    text-anchor: end;
+    font-variant-numeric: tabular-nums;
+  }
+  .volume-dollar-label-peak {
+    font-size: 10.5px;
+    font-weight: 700;
+    fill: var(--accent-warm);
+    text-anchor: start;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .hilo-detail-row {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .hilo-detail {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 14px;
+  }
+  .hilo-detail-arrow { font-weight: 700; width: 14px; }
+  .hilo-value { font-weight: 600; color: var(--text-strong); font-variant-numeric: tabular-nums; }
+  .hilo-detail-caption { color: var(--text-faint); }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 12px;
+  }
+  .stat { min-width: 0; }
+  .stat .label {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: 4px;
+  }
+  .stat .value {
+    font-size: 17px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+  .cloud-value {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .cloud-icon-outline { fill: none; stroke: var(--text-faint); stroke-width: 1.6; stroke-linejoin: round; }
+  .cloud-icon-fill { fill: var(--text-strong); }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 17px;
+    font-weight: 500;
+    color: var(--text-strong);
+  }
+  .chip::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-faint);
+  }
+  .chip-warn::before { background: var(--accent-warm); }
+  .chip-good::before { background: var(--text-strong); }
+
+  .data-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+  }
+  .data-links a {
+    font-size: 13px;
+    color: var(--text-soft);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+  }
+  .data-links a:hover { border-bottom-color: var(--text-soft); }
+  .data-links a:focus-visible {
+    outline: 2px solid var(--text-strong);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+
+  .kalshi-estimate {
+    font-size: 13px;
+    color: var(--text-soft);
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--glass-line);
+  }
+  .kalshi-estimate strong {
+    color: var(--text-strong);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .kalshi-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 10px;
+    border-radius: 10px;
+    font-size: 13.5px;
+  }
+  .kalshi-row + .kalshi-row { margin-top: 2px; }
+  .kalshi-row-match {
+    background: var(--glass-bg-strong);
+    border: 1px solid var(--glass-border);
+  }
+  .kalshi-row-thin { opacity: 0.62; }
+  .kalshi-label { color: var(--text-soft); font-variant-numeric: tabular-nums; }
+  .kalshi-thin-flag {
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    border: 1px solid var(--glass-border);
+    border-radius: 4px;
+    padding: 1px 4px;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+  .kalshi-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+  }
+  .kalshi-pct {
+    font-weight: 600;
+    color: var(--text-strong);
+    font-variant-numeric: tabular-nums;
+  }
+  .kalshi-spread {
+    font-size: 10.5px;
+    color: var(--text-faint);
+    font-variant-numeric: tabular-nums;
+  }
+  .kalshi-ticker {
+    font-size: 11px;
+    color: var(--text-faint);
+    margin-top: 10px;
+  }
+
+  .perf-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .perf-table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 640px;
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+  }
+  .perf-table th {
+    text-align: left;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    padding: 0 10px 8px 0;
+    white-space: nowrap;
+  }
+  .perf-table td {
+    padding: 6px 10px 6px 0;
+    color: var(--text-soft);
+    border-top: 1px solid var(--glass-line);
+    white-space: nowrap;
+  }
+  .perf-table tr:first-child td { border-top: none; }
+  .perf-subtle { color: var(--text-faint); font-size: 10px; }
+  .perf-nodata { color: var(--text-faint); font-style: italic; }
+  .perf-flag { cursor: help; }
+  .perf-flag-caption {
+    font-size: 11px;
+    color: var(--text-faint);
+    margin-top: 8px;
+    line-height: 1.5;
+  }
+
+  .footer {
+    font-size: 12px;
+    color: var(--text-faint);
+    line-height: 1.5;
+    text-align: center;
+    padding: 0 8px;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .content { animation: rise 0.45s ease-out; }
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  }
+</style>
+
+<div class="scene" data-sky="day-clear">
+  <div class="content">
+    <div class="place">
+      <div class="place-eyebrow">Sea-Tac Airport · KSEA</div>
+      <div class="place-name">Seattle, Seattle-Tacoma International Airport</div>
+      <div class="place-updated">As of 4:53 pm · Wednesday, July 22</div>
+    </div>
+
+    <div class="hero">
+      <div class="hero-condition">Sunny</div>
+      <div class="hero-temp">91.94<sup>°F</sup></div>
+      <div class="hero-hilo">
+        <span><span class="hilo-arrow-high">↑</span>93.90°</span>
+        <span><span class="hilo-arrow-low">↓</span>64.00°</span>
+      </div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Trend</div>
+      <div class="estimate-row">
+        <span class="estimate-value"><span class="dot-warm"></span>88.30°</span>
+        <span class="estimate-label">by wed 7:53 pm</span>
+      </div>
+
+      <div class="range-row">
+        <span class="range-label">Raw local trend</span>
+        <span class="range-values">+1.77°/hr</span>
+      </div>
+      <div class="range-row" style="margin-top: 6px;">
+        <span class="range-label">Applied, after damping</span>
+        <span class="range-values">31%</span>
+      </div>
+      <div class="confidence-bar">
+        <div class="confidence-fill" style="width: 31%;"></div>
+      </div>
+      <div class="hint">How much of the raw trend the model trusts, based on proximity to sunrise/peak-heat hour and current cloud/wind. Low near those turning points, since the trend is about to reverse.</div>
+
+      <div class="range-row" style="margin-top: 16px;">
+        <span class="range-label">Uncertainty band</span>
+        <span class="range-values">85.80°–90.80° (±5.00°)</span>
+      </div>
+      <div class="hint">Widens when local pressure is falling (unsettled weather approaching), and independently when the marine push or offshore flow signals below are elevated - separate from the trend confidence above.</div>
+      <div class="hint" style="margin-top: 6px;">Widened: local pressure falling.</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Last 6h + projection</div>
+      <svg viewBox="0 0 640 160" class="sparkline" preserveAspectRatio="none" role="img" aria-label="Temperature trend, last 6 hours and projected estimate">
+  <path d="M 8.0,120.2 L 77.3,104.5 L 146.7,80.3 L 216.0,73.2 L 285.3,48.9 L 354.7,41.8 L 424.0,57.5 L 424.0,132 L 8.0,132 Z" class="spark-area" />
+  <path d="M 8.0,120.2 L 77.3,104.5 L 146.7,80.3 L 216.0,73.2 L 285.3,48.9 L 354.7,41.8 L 424.0,57.5" class="spark-line" />
+  <path d="M 424.0,57.5 L 632.0,86.3" class="spark-proj" />
+  <line x1="632.0" y1="86.3" x2="632.0" y2="132.0" class="spark-est-guide" />
+  <circle cx="424.0" cy="57.5" r="3.5" class="spark-now-dot" />
+  <circle cx="632.0" cy="86.3" r="9" class="spark-est-dot-halo" />
+  <circle cx="632.0" cy="86.3" r="5.5" class="spark-est-dot" />
+  <text x="632.0" y="72.3" text-anchor="end" class="spark-est-label">88°</text>
+</svg>
+      <div class="spark-caption">
+        <span>6h ago</span>
+        <span class="spark-caption-target">wed 7:53 pm</span>
+      </div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Estimated hottest/coldest time of day</div>
+      <div class="hilo-detail-row">
+        <div class="hilo-detail">
+          <span class="hilo-detail-arrow hilo-arrow-high">↑</span>
+          <span class="hilo-value">93.90°</span>
+          <span class="hilo-detail-caption">today's high so far · est. peak ~4:19 pm</span>
+        </div>
+        <div class="hilo-detail">
+          <span class="hilo-detail-arrow hilo-arrow-low">↓</span>
+          <span class="hilo-value">64.00°</span>
+          <span class="hilo-detail-caption">expected low tonight · est. trough ~thu 5:36 am</span>
+        </div>
+      </div>
+      <div class="module-label" style="margin-top: 16px;">Actual so far today</div>
+      <div class="hilo-detail-row">
+        <div class="hilo-detail">
+          <span class="hilo-detail-arrow hilo-arrow-high">↑</span>
+          <span class="hilo-value">93.92°</span>
+          <span class="hilo-detail-caption">recorded at 3:53 pm</span>
+        </div>
+        <div class="hilo-detail">
+          <span class="hilo-detail-arrow hilo-arrow-low">↓</span>
+          <span class="hilo-value">66.92°</span>
+          <span class="hilo-detail-caption">recorded at 6:53 am</span>
+        </div>
+      </div>
+      <div class="module-label" style="margin-top: 16px;">Yesterday</div>
+      <div class="hilo-detail-row">
+        <div class="hilo-detail">
+          <span class="hilo-detail-arrow hilo-arrow-high">↑</span>
+          <span class="hilo-value">93.20°</span>
+          <span class="hilo-detail-caption">recorded at 5:05 pm</span>
+        </div>
+        <div class="hilo-detail">
+          <span class="hilo-detail-arrow hilo-arrow-low">↓</span>
+          <span class="hilo-value">62.60°</span>
+          <span class="hilo-detail-caption">recorded at 6:40 am</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Tomorrow's high</div>
+      <div class="estimate-row">
+        <span class="estimate-value"><span class="dot-warm"></span>80.00°</span>
+        <span class="estimate-label">~5:00 pm · reference confidence 75%*</span>
+      </div>
+      <div class="confidence-bar" style="margin-top: 10px;">
+        <div class="confidence-fill" style="width: 75%;"></div>
+      </div>
+      <div class="hint">From the NWS hourly forecast (HRRR model) - real atmospheric dynamics, not this tool's own trend/persistence guess. The reference confidence % is still a placeholder, not a backtested figure - only 0 of 10 finalized next-day predictions using this source are logged so far; this will switch to a measured number once enough accumulate.</div>
+
+      <div class="module-label" style="margin-top: 16px;">Tomorrow's low</div>
+      <div class="estimate-row">
+        <span class="estimate-value">64.00°</span>
+        <span class="estimate-label">~6:00 am · reference confidence 75%*</span>
+      </div>
+      <div class="confidence-bar" style="margin-top: 10px;">
+        <div class="confidence-fill" style="width: 75%;"></div>
+      </div>
+      <div class="hint">From the NWS hourly forecast (HRRR model) - real atmospheric dynamics, not this tool's own trend/persistence guess. The reference confidence % is still a placeholder, not a backtested figure - only 0 of 10 finalized next-day predictions using this source are logged so far; this will switch to a measured number once enough accumulate.</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Kalshi · today's high market</div>
+      <div class="kalshi-estimate">Observed high: <strong>93.90°F</strong></div>
+<div class="kalshi-row"><span class="kalshi-label">91° or below</span><span class="kalshi-meta"><span class="kalshi-pct">1%</span><span class="kalshi-spread">bid 0¢ / ask 1¢</span></span></div>
+<div class="kalshi-row"><span class="kalshi-label">92° to 93°</span><span class="kalshi-meta"><span class="kalshi-pct">1%</span><span class="kalshi-spread">bid 0¢ / ask 1¢</span></span></div>
+<div class="kalshi-row kalshi-row-match"><span class="kalshi-label">94° to 95°</span><span class="kalshi-meta"><span class="kalshi-pct">97%</span><span class="kalshi-spread">bid 97¢ / ask 99¢</span></span></div>
+<div class="kalshi-row"><span class="kalshi-label">96° to 97°</span><span class="kalshi-meta"><span class="kalshi-pct">2%</span><span class="kalshi-spread">bid 0¢ / ask 2¢</span></span></div>
+<div class="kalshi-row"><span class="kalshi-label">98° to 99°</span><span class="kalshi-meta"><span class="kalshi-pct">1%</span><span class="kalshi-spread">bid 0¢ / ask 1¢</span></span></div>
+<div class="kalshi-row"><span class="kalshi-label">100° or above</span><span class="kalshi-meta"><span class="kalshi-pct">1%</span><span class="kalshi-spread">bid 0¢ / ask 1¢</span></span></div>
+      <div class="hint">Highlighted bracket is the one this tool's own estimate falls into - not a probability call, just a quick eyeball check against the market's pricing.</div>
+      <div class="hint">Bid/ask are the current highest buy offer and lowest sell offer for that bracket (last-price is the most recent trade, which can lag). A wide gap between them usually means a thin, less reliable market.</div>
+      <div class="kalshi-ticker">KXHIGHTSEA-26JUL22</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Kalshi · today's high market volume</div>
+      <div class="estimate-row">
+        <span class="estimate-value">73,401</span>
+        <span class="estimate-label">contracts traded, last 24h</span>
+      </div>
+      <div class="range-row">
+        <span class="range-label">Dollar volume (our estimate)</span>
+        <span class="range-values">≈$14,258 est.</span>
+      </div>
+      <svg viewBox="0 0 640 190" class="volume-chart" preserveAspectRatio="none" role="img" aria-label="Contracts and estimated dollars traded per hour">
+  <rect x="4.0" y="145.9" width="23.5" height="2.1" class="volume-bar"><title>6pm: 270 contracts (≈$77)</title></rect><line x1="15.7" y1="148.0" x2="15.7" y2="152.0" class="volume-tick" /><text x="15.7" y="155.0" class="volume-hour-label" transform="rotate(-60 15.7 155.0)">6pm</text><text x="15.7" y="29.0" class="volume-dollar-label" transform="rotate(-60 15.7 29.0)">$77</text><rect x="30.5" y="135.3" width="23.5" height="12.7" class="volume-bar"><title>7pm: 1,621 contracts (≈$500)</title></rect><line x1="42.2" y1="148.0" x2="42.2" y2="152.0" class="volume-tick" /><text x="42.2" y="155.0" class="volume-hour-label" transform="rotate(-60 42.2 155.0)">7pm</text><text x="42.2" y="29.0" class="volume-dollar-label" transform="rotate(-60 42.2 29.0)">$500</text><rect x="56.9" y="144.6" width="23.5" height="3.4" class="volume-bar"><title>8pm: 433 contracts (≈$91)</title></rect><line x1="68.6" y1="148.0" x2="68.6" y2="152.0" class="volume-tick" /><text x="68.6" y="155.0" class="volume-hour-label" transform="rotate(-60 68.6 155.0)">8pm</text><text x="68.6" y="29.0" class="volume-dollar-label" transform="rotate(-60 68.6 29.0)">$91</text><rect x="83.4" y="145.7" width="23.5" height="2.3" class="volume-bar"><title>9pm: 293 contracts (≈$62)</title></rect><line x1="95.1" y1="148.0" x2="95.1" y2="152.0" class="volume-tick" /><text x="95.1" y="155.0" class="volume-hour-label" transform="rotate(-60 95.1 155.0)">9pm</text><text x="95.1" y="29.0" class="volume-dollar-label" transform="rotate(-60 95.1 29.0)">$62</text><rect x="109.8" y="146.6" width="23.5" height="1.4" class="volume-bar"><title>10pm: 178 contracts (≈$52)</title></rect><line x1="121.6" y1="148.0" x2="121.6" y2="152.0" class="volume-tick" /><text x="121.6" y="155.0" class="volume-hour-label" transform="rotate(-60 121.6 155.0)">10pm</text><text x="121.6" y="29.0" class="volume-dollar-label" transform="rotate(-60 121.6 29.0)">$52</text><rect x="136.3" y="145.0" width="23.5" height="3.0" class="volume-bar"><title>11pm: 376 contracts (≈$90)</title></rect><line x1="148.0" y1="148.0" x2="148.0" y2="152.0" class="volume-tick" /><text x="148.0" y="155.0" class="volume-hour-label" transform="rotate(-60 148.0 155.0)">11pm</text><text x="148.0" y="29.0" class="volume-dollar-label" transform="rotate(-60 148.0 29.0)">$90</text><rect x="162.8" y="142.1" width="23.5" height="5.9" class="volume-bar"><title>12am: 752 contracts (≈$221)</title></rect><line x1="174.5" y1="148.0" x2="174.5" y2="152.0" class="volume-tick" /><text x="174.5" y="155.0" class="volume-hour-label" transform="rotate(-60 174.5 155.0)">12am</text><text x="174.5" y="29.0" class="volume-dollar-label" transform="rotate(-60 174.5 29.0)">$221</text><rect x="189.2" y="141.6" width="23.5" height="6.4" class="volume-bar"><title>1am: 818 contracts (≈$131)</title></rect><line x1="200.9" y1="148.0" x2="200.9" y2="152.0" class="volume-tick" /><text x="200.9" y="155.0" class="volume-hour-label" transform="rotate(-60 200.9 155.0)">1am</text><text x="200.9" y="29.0" class="volume-dollar-label" transform="rotate(-60 200.9 29.0)">$131</text><rect x="215.7" y="130.3" width="23.5" height="17.7" class="volume-bar"><title>2am: 2,247 contracts (≈$358)</title></rect><line x1="227.4" y1="148.0" x2="227.4" y2="152.0" class="volume-tick" /><text x="227.4" y="155.0" class="volume-hour-label" transform="rotate(-60 227.4 155.0)">2am</text><text x="227.4" y="29.0" class="volume-dollar-label" transform="rotate(-60 227.4 29.0)">$358</text><rect x="242.1" y="132.6" width="23.5" height="15.4" class="volume-bar"><title>3am: 1,964 contracts (≈$293)</title></rect><line x1="253.9" y1="148.0" x2="253.9" y2="152.0" class="volume-tick" /><text x="253.9" y="155.0" class="volume-hour-label" transform="rotate(-60 253.9 155.0)">3am</text><text x="253.9" y="29.0" class="volume-dollar-label" transform="rotate(-60 253.9 29.0)">$293</text><rect x="268.6" y="135.8" width="23.5" height="12.2" class="volume-bar"><title>4am: 1,554 contracts (≈$393)</title></rect><line x1="280.3" y1="148.0" x2="280.3" y2="152.0" class="volume-tick" /><text x="280.3" y="155.0" class="volume-hour-label" transform="rotate(-60 280.3 155.0)">4am</text><text x="280.3" y="29.0" class="volume-dollar-label" transform="rotate(-60 280.3 29.0)">$393</text><rect x="295.0" y="124.8" width="23.5" height="23.2" class="volume-bar"><title>5am: 2,947 contracts (≈$451)</title></rect><line x1="306.8" y1="148.0" x2="306.8" y2="152.0" class="volume-tick" /><text x="306.8" y="155.0" class="volume-hour-label" transform="rotate(-60 306.8 155.0)">5am</text><text x="306.8" y="29.0" class="volume-dollar-label" transform="rotate(-60 306.8 29.0)">$451</text><rect x="321.5" y="130.7" width="23.5" height="17.3" class="volume-bar"><title>6am: 2,199 contracts (≈$419)</title></rect><line x1="333.2" y1="148.0" x2="333.2" y2="152.0" class="volume-tick" /><text x="333.2" y="155.0" class="volume-hour-label" transform="rotate(-60 333.2 155.0)">6am</text><text x="333.2" y="29.0" class="volume-dollar-label" transform="rotate(-60 333.2 29.0)">$419</text><rect x="348.0" y="132.1" width="23.5" height="15.9" class="volume-bar"><title>7am: 2,021 contracts (≈$380)</title></rect><line x1="359.7" y1="148.0" x2="359.7" y2="152.0" class="volume-tick" /><text x="359.7" y="155.0" class="volume-hour-label" transform="rotate(-60 359.7 155.0)">7am</text><text x="359.7" y="29.0" class="volume-dollar-label" transform="rotate(-60 359.7 29.0)">$380</text><rect x="374.4" y="127.6" width="23.5" height="20.4" class="volume-bar"><title>8am: 2,591 contracts (≈$421)</title></rect><line x1="386.1" y1="148.0" x2="386.1" y2="152.0" class="volume-tick" /><text x="386.1" y="155.0" class="volume-hour-label" transform="rotate(-60 386.1 155.0)">8am</text><text x="386.1" y="29.0" class="volume-dollar-label" transform="rotate(-60 386.1 29.0)">$421</text><rect x="400.9" y="123.2" width="23.5" height="24.8" class="volume-bar"><title>9am: 3,153 contracts (≈$697)</title></rect><line x1="412.6" y1="148.0" x2="412.6" y2="152.0" class="volume-tick" /><text x="412.6" y="155.0" class="volume-hour-label" transform="rotate(-60 412.6 155.0)">9am</text><text x="412.6" y="29.0" class="volume-dollar-label" transform="rotate(-60 412.6 29.0)">$697</text><rect x="427.3" y="104.8" width="23.5" height="43.2" class="volume-bar"><title>10am: 5,496 contracts (≈$824)</title></rect><line x1="439.1" y1="148.0" x2="439.1" y2="152.0" class="volume-tick" /><text x="439.1" y="155.0" class="volume-hour-label" transform="rotate(-60 439.1 155.0)">10am</text><text x="439.1" y="29.0" class="volume-dollar-label" transform="rotate(-60 439.1 29.0)">$824</text><rect x="453.8" y="109.4" width="23.5" height="38.6" class="volume-bar"><title>11am: 4,914 contracts (≈$773)</title></rect><line x1="465.5" y1="148.0" x2="465.5" y2="152.0" class="volume-tick" /><text x="465.5" y="155.0" class="volume-hour-label" transform="rotate(-60 465.5 155.0)">11am</text><text x="465.5" y="29.0" class="volume-dollar-label" transform="rotate(-60 465.5 29.0)">$773</text><rect x="480.2" y="113.1" width="23.5" height="34.9" class="volume-bar"><title>12pm: 4,440 contracts (≈$815)</title></rect><line x1="492.0" y1="148.0" x2="492.0" y2="152.0" class="volume-tick" /><text x="492.0" y="155.0" class="volume-hour-label" transform="rotate(-60 492.0 155.0)">12pm</text><text x="492.0" y="29.0" class="volume-dollar-label" transform="rotate(-60 492.0 29.0)">$815</text><rect x="506.7" y="131.9" width="23.5" height="16.1" class="volume-bar"><title>1pm: 2,053 contracts (≈$371)</title></rect><line x1="518.4" y1="148.0" x2="518.4" y2="152.0" class="volume-tick" /><text x="518.4" y="155.0" class="volume-hour-label" transform="rotate(-60 518.4 155.0)">1pm</text><text x="518.4" y="29.0" class="volume-dollar-label" transform="rotate(-60 518.4 29.0)">$371</text><rect x="533.2" y="107.4" width="23.5" height="40.6" class="volume-bar"><title>2pm: 5,160 contracts (≈$1,101)</title></rect><line x1="544.9" y1="148.0" x2="544.9" y2="152.0" class="volume-tick" /><text x="544.9" y="155.0" class="volume-hour-label" transform="rotate(-60 544.9 155.0)">2pm</text><text x="544.9" y="29.0" class="volume-dollar-label" transform="rotate(-60 544.9 29.0)">$1.1k</text><rect x="559.6" y="94.1" width="23.5" height="53.9" class="volume-bar"><title>3pm: 6,862 contracts (≈$1,541)</title></rect><line x1="571.4" y1="148.0" x2="571.4" y2="152.0" class="volume-tick" /><text x="571.4" y="155.0" class="volume-hour-label" transform="rotate(-60 571.4 155.0)">3pm</text><text x="571.4" y="29.0" class="volume-dollar-label" transform="rotate(-60 571.4 29.0)">$1.5k</text><rect x="586.1" y="34.0" width="23.5" height="114.0" class="volume-bar-peak"><title>Peak hour - 4pm: 14,505 contracts (≈$2,432)</title></rect><line x1="597.8" y1="148.0" x2="597.8" y2="152.0" class="volume-tick-peak" /><text x="597.8" y="155.0" class="volume-hour-label-peak" transform="rotate(-60 597.8 155.0)">4pm</text><text x="597.8" y="29.0" class="volume-dollar-label-peak" transform="rotate(-60 597.8 29.0)">$2.4k</text><rect x="612.5" y="96.5" width="23.5" height="51.5" class="volume-bar"><title>5pm: 6,557 contracts (≈$1,762)</title></rect><line x1="624.3" y1="148.0" x2="624.3" y2="152.0" class="volume-tick" /><text x="624.3" y="155.0" class="volume-hour-label" transform="rotate(-60 624.3 155.0)">5pm</text><text x="624.3" y="29.0" class="volume-dollar-label" transform="rotate(-60 624.3 29.0)">$1.8k</text>
+</svg>
+      <div class="hint">Contract count matches Kalshi's own "Volume" figure. The dollar amount is our own estimate (contracts × that hour's average price) since Kalshi doesn't publish a dollar total directly.</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Kalshi · today's low market</div>
+      <div class="kalshi-estimate">Observed low: <strong>66.92°F</strong></div>
+<div class="kalshi-row"><span class="kalshi-label">58° or below</span><span class="kalshi-meta"><span class="kalshi-pct">1%</span><span class="kalshi-spread">bid 0¢ / ask 1¢</span></span></div>
+<div class="kalshi-row"><span class="kalshi-label">59° to 60°</span><span class="kalshi-meta"><span class="kalshi-pct">1%</span><span class="kalshi-spread">bid 0¢ / ask 1¢</span></span></div>
+<div class="kalshi-row"><span class="kalshi-label">61° to 62°</span><span class="kalshi-meta"><span class="kalshi-pct">1%</span><span class="kalshi-spread">bid 0¢ / ask 1¢</span></span></div>
+<div class="kalshi-row"><span class="kalshi-label">63° to 64°</span><span class="kalshi-meta"><span class="kalshi-pct">1%</span><span class="kalshi-spread">bid 0¢ / ask 8¢</span></span></div>
+<div class="kalshi-row"><span class="kalshi-label">65° to 66°</span><span class="kalshi-meta"><span class="kalshi-pct">99%</span><span class="kalshi-spread">bid 95¢ / ask 98¢</span></span></div>
+<div class="kalshi-row kalshi-row-match"><span class="kalshi-label">67° or above</span><span class="kalshi-meta"><span class="kalshi-pct">1%</span><span class="kalshi-spread">bid 0¢ / ask 1¢</span></span></div>
+      <div class="hint">Trades stay manual for now - this is a side-by-side view for a human to review, not an automated signal.</div>
+      <div class="kalshi-ticker">KXLOWTSEA-26JUL22</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Kalshi · today's low market volume</div>
+      <div class="estimate-row">
+        <span class="estimate-value">9,244</span>
+        <span class="estimate-label">contracts traded, last 24h</span>
+      </div>
+      <div class="range-row">
+        <span class="range-label">Dollar volume (our estimate)</span>
+        <span class="range-values">≈$3,617 est.</span>
+      </div>
+      <svg viewBox="0 0 640 190" class="volume-chart" preserveAspectRatio="none" role="img" aria-label="Contracts and estimated dollars traded per hour">
+  <rect x="4.0" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>6pm: 1 contracts (≈$0)</title></rect><line x1="15.7" y1="148.0" x2="15.7" y2="152.0" class="volume-tick" /><text x="15.7" y="155.0" class="volume-hour-label" transform="rotate(-60 15.7 155.0)">6pm</text><text x="15.7" y="29.0" class="volume-dollar-label" transform="rotate(-60 15.7 29.0)">$0</text><rect x="30.5" y="136.2" width="23.5" height="11.8" class="volume-bar"><title>7pm: 262 contracts (≈$76)</title></rect><line x1="42.2" y1="148.0" x2="42.2" y2="152.0" class="volume-tick" /><text x="42.2" y="155.0" class="volume-hour-label" transform="rotate(-60 42.2 155.0)">7pm</text><text x="42.2" y="29.0" class="volume-dollar-label" transform="rotate(-60 42.2 29.0)">$76</text><rect x="56.9" y="133.3" width="23.5" height="14.7" class="volume-bar"><title>8pm: 326 contracts (≈$88)</title></rect><line x1="68.6" y1="148.0" x2="68.6" y2="152.0" class="volume-tick" /><text x="68.6" y="155.0" class="volume-hour-label" transform="rotate(-60 68.6 155.0)">8pm</text><text x="68.6" y="29.0" class="volume-dollar-label" transform="rotate(-60 68.6 29.0)">$88</text><rect x="83.4" y="146.4" width="23.5" height="1.6" class="volume-bar"><title>9pm: 35 contracts (≈$15)</title></rect><line x1="95.1" y1="148.0" x2="95.1" y2="152.0" class="volume-tick" /><text x="95.1" y="155.0" class="volume-hour-label" transform="rotate(-60 95.1 155.0)">9pm</text><text x="95.1" y="29.0" class="volume-dollar-label" transform="rotate(-60 95.1 29.0)">$15</text><rect x="109.8" y="143.4" width="23.5" height="4.6" class="volume-bar"><title>10pm: 102 contracts (≈$20)</title></rect><line x1="121.6" y1="148.0" x2="121.6" y2="152.0" class="volume-tick" /><text x="121.6" y="155.0" class="volume-hour-label" transform="rotate(-60 121.6 155.0)">10pm</text><text x="121.6" y="29.0" class="volume-dollar-label" transform="rotate(-60 121.6 29.0)">$20</text><rect x="136.3" y="137.3" width="23.5" height="10.7" class="volume-bar"><title>11pm: 237 contracts (≈$80)</title></rect><line x1="148.0" y1="148.0" x2="148.0" y2="152.0" class="volume-tick" /><text x="148.0" y="155.0" class="volume-hour-label" transform="rotate(-60 148.0 155.0)">11pm</text><text x="148.0" y="29.0" class="volume-dollar-label" transform="rotate(-60 148.0 29.0)">$80</text><rect x="162.8" y="144.4" width="23.5" height="3.6" class="volume-bar"><title>12am: 80 contracts (≈$23)</title></rect><line x1="174.5" y1="148.0" x2="174.5" y2="152.0" class="volume-tick" /><text x="174.5" y="155.0" class="volume-hour-label" transform="rotate(-60 174.5 155.0)">12am</text><text x="174.5" y="29.0" class="volume-dollar-label" transform="rotate(-60 174.5 29.0)">$23</text><rect x="189.2" y="147.9" width="23.5" height="1.0" class="volume-bar"><title>1am: 2 contracts (≈$1)</title></rect><line x1="200.9" y1="148.0" x2="200.9" y2="152.0" class="volume-tick" /><text x="200.9" y="155.0" class="volume-hour-label" transform="rotate(-60 200.9 155.0)">1am</text><text x="200.9" y="29.0" class="volume-dollar-label" transform="rotate(-60 200.9 29.0)">$1</text><rect x="215.7" y="147.0" width="23.5" height="1.0" class="volume-bar"><title>2am: 23 contracts (≈$8)</title></rect><line x1="227.4" y1="148.0" x2="227.4" y2="152.0" class="volume-tick" /><text x="227.4" y="155.0" class="volume-hour-label" transform="rotate(-60 227.4 155.0)">2am</text><text x="227.4" y="29.0" class="volume-dollar-label" transform="rotate(-60 227.4 29.0)">$8</text><rect x="242.1" y="141.2" width="23.5" height="6.8" class="volume-bar"><title>3am: 151 contracts (≈$19)</title></rect><line x1="253.9" y1="148.0" x2="253.9" y2="152.0" class="volume-tick" /><text x="253.9" y="155.0" class="volume-hour-label" transform="rotate(-60 253.9 155.0)">3am</text><text x="253.9" y="29.0" class="volume-dollar-label" transform="rotate(-60 253.9 29.0)">$19</text><rect x="268.6" y="129.0" width="23.5" height="19.0" class="volume-bar"><title>4am: 421 contracts (≈$73)</title></rect><line x1="280.3" y1="148.0" x2="280.3" y2="152.0" class="volume-tick" /><text x="280.3" y="155.0" class="volume-hour-label" transform="rotate(-60 280.3 155.0)">4am</text><text x="280.3" y="29.0" class="volume-dollar-label" transform="rotate(-60 280.3 29.0)">$73</text><rect x="295.0" y="122.5" width="23.5" height="25.5" class="volume-bar"><title>5am: 567 contracts (≈$164)</title></rect><line x1="306.8" y1="148.0" x2="306.8" y2="152.0" class="volume-tick" /><text x="306.8" y="155.0" class="volume-hour-label" transform="rotate(-60 306.8 155.0)">5am</text><text x="306.8" y="29.0" class="volume-dollar-label" transform="rotate(-60 306.8 29.0)">$164</text><rect x="321.5" y="95.9" width="23.5" height="52.1" class="volume-bar"><title>6am: 1,156 contracts (≈$379)</title></rect><line x1="333.2" y1="148.0" x2="333.2" y2="152.0" class="volume-tick" /><text x="333.2" y="155.0" class="volume-hour-label" transform="rotate(-60 333.2 155.0)">6am</text><text x="333.2" y="29.0" class="volume-dollar-label" transform="rotate(-60 333.2 29.0)">$379</text><rect x="348.0" y="34.0" width="23.5" height="114.0" class="volume-bar-peak"><title>Peak hour - 7am: 2,530 contracts (≈$1,183)</title></rect><line x1="359.7" y1="148.0" x2="359.7" y2="152.0" class="volume-tick-peak" /><text x="359.7" y="155.0" class="volume-hour-label-peak" transform="rotate(-60 359.7 155.0)">7am</text><text x="359.7" y="29.0" class="volume-dollar-label-peak" transform="rotate(-60 359.7 29.0)">$1.2k</text><rect x="374.4" y="94.8" width="23.5" height="53.2" class="volume-bar"><title>8am: 1,181 contracts (≈$647)</title></rect><line x1="386.1" y1="148.0" x2="386.1" y2="152.0" class="volume-tick" /><text x="386.1" y="155.0" class="volume-hour-label" transform="rotate(-60 386.1 155.0)">8am</text><text x="386.1" y="29.0" class="volume-dollar-label" transform="rotate(-60 386.1 29.0)">$647</text><rect x="400.9" y="116.3" width="23.5" height="31.7" class="volume-bar"><title>9am: 703 contracts (≈$521)</title></rect><line x1="412.6" y1="148.0" x2="412.6" y2="152.0" class="volume-tick" /><text x="412.6" y="155.0" class="volume-hour-label" transform="rotate(-60 412.6 155.0)">9am</text><text x="412.6" y="29.0" class="volume-dollar-label" transform="rotate(-60 412.6 29.0)">$521</text><rect x="427.3" y="134.9" width="23.5" height="13.1" class="volume-bar"><title>10am: 290 contracts (≈$112)</title></rect><line x1="439.1" y1="148.0" x2="439.1" y2="152.0" class="volume-tick" /><text x="439.1" y="155.0" class="volume-hour-label" transform="rotate(-60 439.1 155.0)">10am</text><text x="439.1" y="29.0" class="volume-dollar-label" transform="rotate(-60 439.1 29.0)">$112</text><rect x="453.8" y="140.9" width="23.5" height="7.1" class="volume-bar"><title>11am: 157 contracts (≈$72)</title></rect><line x1="465.5" y1="148.0" x2="465.5" y2="152.0" class="volume-tick" /><text x="465.5" y="155.0" class="volume-hour-label" transform="rotate(-60 465.5 155.0)">11am</text><text x="465.5" y="29.0" class="volume-dollar-label" transform="rotate(-60 465.5 29.0)">$72</text><rect x="480.2" y="133.0" width="23.5" height="15.0" class="volume-bar"><title>12pm: 333 contracts (≈$83)</title></rect><line x1="492.0" y1="148.0" x2="492.0" y2="152.0" class="volume-tick" /><text x="492.0" y="155.0" class="volume-hour-label" transform="rotate(-60 492.0 155.0)">12pm</text><text x="492.0" y="29.0" class="volume-dollar-label" transform="rotate(-60 492.0 29.0)">$83</text><rect x="506.7" y="147.2" width="23.5" height="1.0" class="volume-bar"><title>1pm: 17 contracts (≈$1)</title></rect><line x1="518.4" y1="148.0" x2="518.4" y2="152.0" class="volume-tick" /><text x="518.4" y="155.0" class="volume-hour-label" transform="rotate(-60 518.4 155.0)">1pm</text><text x="518.4" y="29.0" class="volume-dollar-label" transform="rotate(-60 518.4 29.0)">$1</text><rect x="533.2" y="132.6" width="23.5" height="15.4" class="volume-bar"><title>2pm: 341 contracts (≈$4)</title></rect><line x1="544.9" y1="148.0" x2="544.9" y2="152.0" class="volume-tick" /><text x="544.9" y="155.0" class="volume-hour-label" transform="rotate(-60 544.9 155.0)">2pm</text><text x="544.9" y="29.0" class="volume-dollar-label" transform="rotate(-60 544.9 29.0)">$4</text><rect x="559.6" y="146.8" width="23.5" height="1.2" class="volume-bar"><title>3pm: 26 contracts (≈$18)</title></rect><line x1="571.4" y1="148.0" x2="571.4" y2="152.0" class="volume-tick" /><text x="571.4" y="155.0" class="volume-hour-label" transform="rotate(-60 571.4 155.0)">3pm</text><text x="571.4" y="29.0" class="volume-dollar-label" transform="rotate(-60 571.4 29.0)">$18</text><rect x="586.1" y="147.6" width="23.5" height="1.0" class="volume-bar"><title>4pm: 8 contracts (≈$0)</title></rect><line x1="597.8" y1="148.0" x2="597.8" y2="152.0" class="volume-tick" /><text x="597.8" y="155.0" class="volume-hour-label" transform="rotate(-60 597.8 155.0)">4pm</text><text x="597.8" y="29.0" class="volume-dollar-label" transform="rotate(-60 597.8 29.0)">$0</text><rect x="612.5" y="134.7" width="23.5" height="13.3" class="volume-bar"><title>5pm: 296 contracts (≈$31)</title></rect><line x1="624.3" y1="148.0" x2="624.3" y2="152.0" class="volume-tick" /><text x="624.3" y="155.0" class="volume-hour-label" transform="rotate(-60 624.3 155.0)">5pm</text><text x="624.3" y="29.0" class="volume-dollar-label" transform="rotate(-60 624.3 29.0)">$31</text>
+</svg>
+      <div class="hint">Contract count matches Kalshi's own "Volume" figure. The dollar amount is our own estimate (contracts × that hour's average price) since Kalshi doesn't publish a dollar total directly.</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Kalshi · tomorrow's high market</div>
+      <div class="kalshi-estimate">Estimated high: <strong>80.00°F</strong></div>
+<div class="kalshi-row"><span class="kalshi-label">75° or below</span><span class="kalshi-meta"><span class="kalshi-pct">46%</span><span class="kalshi-spread">bid 45¢ / ask 46¢</span></span></div>
+<div class="kalshi-row"><span class="kalshi-label">76° to 77°</span><span class="kalshi-meta"><span class="kalshi-pct">27%</span><span class="kalshi-spread">bid 25¢ / ask 27¢</span></span></div>
+<div class="kalshi-row"><span class="kalshi-label">78° to 79°</span><span class="kalshi-meta"><span class="kalshi-pct">23%</span><span class="kalshi-spread">bid 21¢ / ask 23¢</span></span></div>
+<div class="kalshi-row kalshi-row-match"><span class="kalshi-label">80° to 81°</span><span class="kalshi-meta"><span class="kalshi-pct">10%</span><span class="kalshi-spread">bid 7¢ / ask 9¢</span></span></div>
+<div class="kalshi-row"><span class="kalshi-label">82° to 83°</span><span class="kalshi-meta"><span class="kalshi-pct">3%</span><span class="kalshi-spread">bid 3¢ / ask 4¢</span></span></div>
+<div class="kalshi-row"><span class="kalshi-label">84° or above</span><span class="kalshi-meta"><span class="kalshi-pct">1%</span><span class="kalshi-spread">bid 1¢ / ask 3¢</span></span></div>
+      <div class="hint">Highlighted bracket is the one this tool's tomorrow-high estimate falls into.</div>
+      <div class="kalshi-ticker">KXHIGHTSEA-26JUL23</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Kalshi · tomorrow's high market volume</div>
+      <div class="estimate-row">
+        <span class="estimate-value">3,202</span>
+        <span class="estimate-label">contracts traded, last 24h</span>
+      </div>
+      <div class="range-row">
+        <span class="range-label">Dollar volume (our estimate)</span>
+        <span class="range-values">≈$949 est.</span>
+      </div>
+      <svg viewBox="0 0 640 190" class="volume-chart" preserveAspectRatio="none" role="img" aria-label="Contracts and estimated dollars traded per hour">
+  <rect x="4.0" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>6pm: 0 contracts (≈$0)</title></rect><line x1="15.7" y1="148.0" x2="15.7" y2="152.0" class="volume-tick" /><text x="15.7" y="155.0" class="volume-hour-label" transform="rotate(-60 15.7 155.0)">6pm</text><text x="15.7" y="29.0" class="volume-dollar-label" transform="rotate(-60 15.7 29.0)">$0</text><rect x="30.5" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>7pm: 0 contracts (≈$0)</title></rect><line x1="42.2" y1="148.0" x2="42.2" y2="152.0" class="volume-tick" /><text x="42.2" y="155.0" class="volume-hour-label" transform="rotate(-60 42.2 155.0)">7pm</text><text x="42.2" y="29.0" class="volume-dollar-label" transform="rotate(-60 42.2 29.0)">$0</text><rect x="56.9" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>8pm: 0 contracts (≈$0)</title></rect><line x1="68.6" y1="148.0" x2="68.6" y2="152.0" class="volume-tick" /><text x="68.6" y="155.0" class="volume-hour-label" transform="rotate(-60 68.6 155.0)">8pm</text><text x="68.6" y="29.0" class="volume-dollar-label" transform="rotate(-60 68.6 29.0)">$0</text><rect x="83.4" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>9pm: 0 contracts (≈$0)</title></rect><line x1="95.1" y1="148.0" x2="95.1" y2="152.0" class="volume-tick" /><text x="95.1" y="155.0" class="volume-hour-label" transform="rotate(-60 95.1 155.0)">9pm</text><text x="95.1" y="29.0" class="volume-dollar-label" transform="rotate(-60 95.1 29.0)">$0</text><rect x="109.8" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>10pm: 0 contracts (≈$0)</title></rect><line x1="121.6" y1="148.0" x2="121.6" y2="152.0" class="volume-tick" /><text x="121.6" y="155.0" class="volume-hour-label" transform="rotate(-60 121.6 155.0)">10pm</text><text x="121.6" y="29.0" class="volume-dollar-label" transform="rotate(-60 121.6 29.0)">$0</text><rect x="136.3" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>11pm: 0 contracts (≈$0)</title></rect><line x1="148.0" y1="148.0" x2="148.0" y2="152.0" class="volume-tick" /><text x="148.0" y="155.0" class="volume-hour-label" transform="rotate(-60 148.0 155.0)">11pm</text><text x="148.0" y="29.0" class="volume-dollar-label" transform="rotate(-60 148.0 29.0)">$0</text><rect x="162.8" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>12am: 0 contracts (≈$0)</title></rect><line x1="174.5" y1="148.0" x2="174.5" y2="152.0" class="volume-tick" /><text x="174.5" y="155.0" class="volume-hour-label" transform="rotate(-60 174.5 155.0)">12am</text><text x="174.5" y="29.0" class="volume-dollar-label" transform="rotate(-60 174.5 29.0)">$0</text><rect x="189.2" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>1am: 0 contracts (≈$0)</title></rect><line x1="200.9" y1="148.0" x2="200.9" y2="152.0" class="volume-tick" /><text x="200.9" y="155.0" class="volume-hour-label" transform="rotate(-60 200.9 155.0)">1am</text><text x="200.9" y="29.0" class="volume-dollar-label" transform="rotate(-60 200.9 29.0)">$0</text><rect x="215.7" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>2am: 0 contracts (≈$0)</title></rect><line x1="227.4" y1="148.0" x2="227.4" y2="152.0" class="volume-tick" /><text x="227.4" y="155.0" class="volume-hour-label" transform="rotate(-60 227.4 155.0)">2am</text><text x="227.4" y="29.0" class="volume-dollar-label" transform="rotate(-60 227.4 29.0)">$0</text><rect x="242.1" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>3am: 0 contracts (≈$0)</title></rect><line x1="253.9" y1="148.0" x2="253.9" y2="152.0" class="volume-tick" /><text x="253.9" y="155.0" class="volume-hour-label" transform="rotate(-60 253.9 155.0)">3am</text><text x="253.9" y="29.0" class="volume-dollar-label" transform="rotate(-60 253.9 29.0)">$0</text><rect x="268.6" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>4am: 0 contracts (≈$0)</title></rect><line x1="280.3" y1="148.0" x2="280.3" y2="152.0" class="volume-tick" /><text x="280.3" y="155.0" class="volume-hour-label" transform="rotate(-60 280.3 155.0)">4am</text><text x="280.3" y="29.0" class="volume-dollar-label" transform="rotate(-60 280.3 29.0)">$0</text><rect x="295.0" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>5am: 0 contracts (≈$0)</title></rect><line x1="306.8" y1="148.0" x2="306.8" y2="152.0" class="volume-tick" /><text x="306.8" y="155.0" class="volume-hour-label" transform="rotate(-60 306.8 155.0)">5am</text><text x="306.8" y="29.0" class="volume-dollar-label" transform="rotate(-60 306.8 29.0)">$0</text><rect x="321.5" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>6am: 0 contracts (≈$0)</title></rect><line x1="333.2" y1="148.0" x2="333.2" y2="152.0" class="volume-tick" /><text x="333.2" y="155.0" class="volume-hour-label" transform="rotate(-60 333.2 155.0)">6am</text><text x="333.2" y="29.0" class="volume-dollar-label" transform="rotate(-60 333.2 29.0)">$0</text><rect x="348.0" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>7am: 0 contracts (≈$0)</title></rect><line x1="359.7" y1="148.0" x2="359.7" y2="152.0" class="volume-tick" /><text x="359.7" y="155.0" class="volume-hour-label" transform="rotate(-60 359.7 155.0)">7am</text><text x="359.7" y="29.0" class="volume-dollar-label" transform="rotate(-60 359.7 29.0)">$0</text><rect x="374.4" y="131.0" width="23.5" height="17.0" class="volume-bar"><title>8am: 208 contracts (≈$31)</title></rect><line x1="386.1" y1="148.0" x2="386.1" y2="152.0" class="volume-tick" /><text x="386.1" y="155.0" class="volume-hour-label" transform="rotate(-60 386.1 155.0)">8am</text><text x="386.1" y="29.0" class="volume-dollar-label" transform="rotate(-60 386.1 29.0)">$31</text><rect x="400.9" y="129.9" width="23.5" height="18.1" class="volume-bar"><title>9am: 221 contracts (≈$21)</title></rect><line x1="412.6" y1="148.0" x2="412.6" y2="152.0" class="volume-tick" /><text x="412.6" y="155.0" class="volume-hour-label" transform="rotate(-60 412.6 155.0)">9am</text><text x="412.6" y="29.0" class="volume-dollar-label" transform="rotate(-60 412.6 29.0)">$21</text><rect x="427.3" y="129.5" width="23.5" height="18.5" class="volume-bar"><title>10am: 226 contracts (≈$39)</title></rect><line x1="439.1" y1="148.0" x2="439.1" y2="152.0" class="volume-tick" /><text x="439.1" y="155.0" class="volume-hour-label" transform="rotate(-60 439.1 155.0)">10am</text><text x="439.1" y="29.0" class="volume-dollar-label" transform="rotate(-60 439.1 29.0)">$39</text><rect x="453.8" y="133.1" width="23.5" height="14.9" class="volume-bar"><title>11am: 182 contracts (≈$22)</title></rect><line x1="465.5" y1="148.0" x2="465.5" y2="152.0" class="volume-tick" /><text x="465.5" y="155.0" class="volume-hour-label" transform="rotate(-60 465.5 155.0)">11am</text><text x="465.5" y="29.0" class="volume-dollar-label" transform="rotate(-60 465.5 29.0)">$22</text><rect x="480.2" y="131.6" width="23.5" height="16.4" class="volume-bar"><title>12pm: 200 contracts (≈$30)</title></rect><line x1="492.0" y1="148.0" x2="492.0" y2="152.0" class="volume-tick" /><text x="492.0" y="155.0" class="volume-hour-label" transform="rotate(-60 492.0 155.0)">12pm</text><text x="492.0" y="29.0" class="volume-dollar-label" transform="rotate(-60 492.0 29.0)">$30</text><rect x="506.7" y="135.2" width="23.5" height="12.8" class="volume-bar"><title>1pm: 156 contracts (≈$32)</title></rect><line x1="518.4" y1="148.0" x2="518.4" y2="152.0" class="volume-tick" /><text x="518.4" y="155.0" class="volume-hour-label" transform="rotate(-60 518.4 155.0)">1pm</text><text x="518.4" y="29.0" class="volume-dollar-label" transform="rotate(-60 518.4 29.0)">$32</text><rect x="533.2" y="142.9" width="23.5" height="5.1" class="volume-bar"><title>2pm: 62 contracts (≈$20)</title></rect><line x1="544.9" y1="148.0" x2="544.9" y2="152.0" class="volume-tick" /><text x="544.9" y="155.0" class="volume-hour-label" transform="rotate(-60 544.9 155.0)">2pm</text><text x="544.9" y="29.0" class="volume-dollar-label" transform="rotate(-60 544.9 29.0)">$20</text><rect x="559.6" y="34.0" width="23.5" height="114.0" class="volume-bar-peak"><title>Peak hour - 3pm: 1,394 contracts (≈$619)</title></rect><line x1="571.4" y1="148.0" x2="571.4" y2="152.0" class="volume-tick-peak" /><text x="571.4" y="155.0" class="volume-hour-label-peak" transform="rotate(-60 571.4 155.0)">3pm</text><text x="571.4" y="29.0" class="volume-dollar-label-peak" transform="rotate(-60 571.4 29.0)">$619</text><rect x="586.1" y="141.1" width="23.5" height="6.9" class="volume-bar"><title>4pm: 84 contracts (≈$25)</title></rect><line x1="597.8" y1="148.0" x2="597.8" y2="152.0" class="volume-tick" /><text x="597.8" y="155.0" class="volume-hour-label" transform="rotate(-60 597.8 155.0)">4pm</text><text x="597.8" y="29.0" class="volume-dollar-label" transform="rotate(-60 597.8 29.0)">$25</text><rect x="612.5" y="109.6" width="23.5" height="38.4" class="volume-bar"><title>5pm: 469 contracts (≈$109)</title></rect><line x1="624.3" y1="148.0" x2="624.3" y2="152.0" class="volume-tick" /><text x="624.3" y="155.0" class="volume-hour-label" transform="rotate(-60 624.3 155.0)">5pm</text><text x="624.3" y="29.0" class="volume-dollar-label" transform="rotate(-60 624.3 29.0)">$109</text>
+</svg>
+      <div class="hint">Contract count matches Kalshi's own "Volume" figure. The dollar amount is our own estimate (contracts × that hour's average price) since Kalshi doesn't publish a dollar total directly.</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Kalshi · tomorrow's low market</div>
+      <div class="kalshi-estimate">Estimated low: <strong>64.00°F</strong></div>
+<div class="kalshi-row"><span class="kalshi-label">57° or below</span><span class="kalshi-meta"><span class="kalshi-pct">2%</span><span class="kalshi-spread">bid 0¢ / ask 2¢</span></span></div>
+<div class="kalshi-row"><span class="kalshi-label">58° to 59°</span><span class="kalshi-meta"><span class="kalshi-pct">8%</span><span class="kalshi-spread">bid 2¢ / ask 9¢</span></span></div>
+<div class="kalshi-row"><span class="kalshi-label">60° to 61°</span><span class="kalshi-meta"><span class="kalshi-pct">25%</span><span class="kalshi-spread">bid 25¢ / ask 26¢</span></span></div>
+<div class="kalshi-row"><span class="kalshi-label">62° to 63°</span><span class="kalshi-meta"><span class="kalshi-pct">47%</span><span class="kalshi-spread">bid 42¢ / ask 48¢</span></span></div>
+<div class="kalshi-row kalshi-row-match"><span class="kalshi-label">64° to 65°</span><span class="kalshi-meta"><span class="kalshi-pct">17%</span><span class="kalshi-spread">bid 15¢ / ask 16¢</span></span></div>
+<div class="kalshi-row"><span class="kalshi-label">66° or above</span><span class="kalshi-meta"><span class="kalshi-pct">1%</span><span class="kalshi-spread">bid 1¢ / ask 5¢</span></span></div>
+      <div class="hint">Highlighted bracket is the one this tool's tomorrow-low estimate falls into.</div>
+      <div class="kalshi-ticker">KXLOWTSEA-26JUL23</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Kalshi · tomorrow's low market volume</div>
+      <div class="estimate-row">
+        <span class="estimate-value">616</span>
+        <span class="estimate-label">contracts traded, last 24h</span>
+      </div>
+      <div class="range-row">
+        <span class="range-label">Dollar volume (our estimate)</span>
+        <span class="range-values">≈$131 est.</span>
+      </div>
+      <svg viewBox="0 0 640 190" class="volume-chart" preserveAspectRatio="none" role="img" aria-label="Contracts and estimated dollars traded per hour">
+  <rect x="4.0" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>6pm: 0 contracts (≈$0)</title></rect><line x1="15.7" y1="148.0" x2="15.7" y2="152.0" class="volume-tick" /><text x="15.7" y="155.0" class="volume-hour-label" transform="rotate(-60 15.7 155.0)">6pm</text><text x="15.7" y="29.0" class="volume-dollar-label" transform="rotate(-60 15.7 29.0)">$0</text><rect x="30.5" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>7pm: 0 contracts (≈$0)</title></rect><line x1="42.2" y1="148.0" x2="42.2" y2="152.0" class="volume-tick" /><text x="42.2" y="155.0" class="volume-hour-label" transform="rotate(-60 42.2 155.0)">7pm</text><text x="42.2" y="29.0" class="volume-dollar-label" transform="rotate(-60 42.2 29.0)">$0</text><rect x="56.9" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>8pm: 0 contracts (≈$0)</title></rect><line x1="68.6" y1="148.0" x2="68.6" y2="152.0" class="volume-tick" /><text x="68.6" y="155.0" class="volume-hour-label" transform="rotate(-60 68.6 155.0)">8pm</text><text x="68.6" y="29.0" class="volume-dollar-label" transform="rotate(-60 68.6 29.0)">$0</text><rect x="83.4" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>9pm: 0 contracts (≈$0)</title></rect><line x1="95.1" y1="148.0" x2="95.1" y2="152.0" class="volume-tick" /><text x="95.1" y="155.0" class="volume-hour-label" transform="rotate(-60 95.1 155.0)">9pm</text><text x="95.1" y="29.0" class="volume-dollar-label" transform="rotate(-60 95.1 29.0)">$0</text><rect x="109.8" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>10pm: 0 contracts (≈$0)</title></rect><line x1="121.6" y1="148.0" x2="121.6" y2="152.0" class="volume-tick" /><text x="121.6" y="155.0" class="volume-hour-label" transform="rotate(-60 121.6 155.0)">10pm</text><text x="121.6" y="29.0" class="volume-dollar-label" transform="rotate(-60 121.6 29.0)">$0</text><rect x="136.3" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>11pm: 0 contracts (≈$0)</title></rect><line x1="148.0" y1="148.0" x2="148.0" y2="152.0" class="volume-tick" /><text x="148.0" y="155.0" class="volume-hour-label" transform="rotate(-60 148.0 155.0)">11pm</text><text x="148.0" y="29.0" class="volume-dollar-label" transform="rotate(-60 148.0 29.0)">$0</text><rect x="162.8" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>12am: 0 contracts (≈$0)</title></rect><line x1="174.5" y1="148.0" x2="174.5" y2="152.0" class="volume-tick" /><text x="174.5" y="155.0" class="volume-hour-label" transform="rotate(-60 174.5 155.0)">12am</text><text x="174.5" y="29.0" class="volume-dollar-label" transform="rotate(-60 174.5 29.0)">$0</text><rect x="189.2" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>1am: 0 contracts (≈$0)</title></rect><line x1="200.9" y1="148.0" x2="200.9" y2="152.0" class="volume-tick" /><text x="200.9" y="155.0" class="volume-hour-label" transform="rotate(-60 200.9 155.0)">1am</text><text x="200.9" y="29.0" class="volume-dollar-label" transform="rotate(-60 200.9 29.0)">$0</text><rect x="215.7" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>2am: 0 contracts (≈$0)</title></rect><line x1="227.4" y1="148.0" x2="227.4" y2="152.0" class="volume-tick" /><text x="227.4" y="155.0" class="volume-hour-label" transform="rotate(-60 227.4 155.0)">2am</text><text x="227.4" y="29.0" class="volume-dollar-label" transform="rotate(-60 227.4 29.0)">$0</text><rect x="242.1" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>3am: 0 contracts (≈$0)</title></rect><line x1="253.9" y1="148.0" x2="253.9" y2="152.0" class="volume-tick" /><text x="253.9" y="155.0" class="volume-hour-label" transform="rotate(-60 253.9 155.0)">3am</text><text x="253.9" y="29.0" class="volume-dollar-label" transform="rotate(-60 253.9 29.0)">$0</text><rect x="268.6" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>4am: 0 contracts (≈$0)</title></rect><line x1="280.3" y1="148.0" x2="280.3" y2="152.0" class="volume-tick" /><text x="280.3" y="155.0" class="volume-hour-label" transform="rotate(-60 280.3 155.0)">4am</text><text x="280.3" y="29.0" class="volume-dollar-label" transform="rotate(-60 280.3 29.0)">$0</text><rect x="295.0" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>5am: 0 contracts (≈$0)</title></rect><line x1="306.8" y1="148.0" x2="306.8" y2="152.0" class="volume-tick" /><text x="306.8" y="155.0" class="volume-hour-label" transform="rotate(-60 306.8 155.0)">5am</text><text x="306.8" y="29.0" class="volume-dollar-label" transform="rotate(-60 306.8 29.0)">$0</text><rect x="321.5" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>6am: 0 contracts (≈$0)</title></rect><line x1="333.2" y1="148.0" x2="333.2" y2="152.0" class="volume-tick" /><text x="333.2" y="155.0" class="volume-hour-label" transform="rotate(-60 333.2 155.0)">6am</text><text x="333.2" y="29.0" class="volume-dollar-label" transform="rotate(-60 333.2 29.0)">$0</text><rect x="348.0" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>7am: 0 contracts (≈$0)</title></rect><line x1="359.7" y1="148.0" x2="359.7" y2="152.0" class="volume-tick" /><text x="359.7" y="155.0" class="volume-hour-label" transform="rotate(-60 359.7 155.0)">7am</text><text x="359.7" y="29.0" class="volume-dollar-label" transform="rotate(-60 359.7 29.0)">$0</text><rect x="374.4" y="34.0" width="23.5" height="114.0" class="volume-bar-peak"><title>Peak hour - 8am: 488 contracts (≈$84)</title></rect><line x1="386.1" y1="148.0" x2="386.1" y2="152.0" class="volume-tick-peak" /><text x="386.1" y="155.0" class="volume-hour-label-peak" transform="rotate(-60 386.1 155.0)">8am</text><text x="386.1" y="29.0" class="volume-dollar-label-peak" transform="rotate(-60 386.1 29.0)">$84</text><rect x="400.9" y="138.7" width="23.5" height="9.3" class="volume-bar"><title>9am: 40 contracts (≈$14)</title></rect><line x1="412.6" y1="148.0" x2="412.6" y2="152.0" class="volume-tick" /><text x="412.6" y="155.0" class="volume-hour-label" transform="rotate(-60 412.6 155.0)">9am</text><text x="412.6" y="29.0" class="volume-dollar-label" transform="rotate(-60 412.6 29.0)">$14</text><rect x="427.3" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>10am: 0 contracts (≈$0)</title></rect><line x1="439.1" y1="148.0" x2="439.1" y2="152.0" class="volume-tick" /><text x="439.1" y="155.0" class="volume-hour-label" transform="rotate(-60 439.1 155.0)">10am</text><text x="439.1" y="29.0" class="volume-dollar-label" transform="rotate(-60 439.1 29.0)">$0</text><rect x="453.8" y="132.6" width="23.5" height="15.4" class="volume-bar"><title>11am: 66 contracts (≈$24)</title></rect><line x1="465.5" y1="148.0" x2="465.5" y2="152.0" class="volume-tick" /><text x="465.5" y="155.0" class="volume-hour-label" transform="rotate(-60 465.5 155.0)">11am</text><text x="465.5" y="29.0" class="volume-dollar-label" transform="rotate(-60 465.5 29.0)">$24</text><rect x="480.2" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>12pm: 0 contracts (≈$0)</title></rect><line x1="492.0" y1="148.0" x2="492.0" y2="152.0" class="volume-tick" /><text x="492.0" y="155.0" class="volume-hour-label" transform="rotate(-60 492.0 155.0)">12pm</text><text x="492.0" y="29.0" class="volume-dollar-label" transform="rotate(-60 492.0 29.0)">$0</text><rect x="506.7" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>1pm: 0 contracts (≈$0)</title></rect><line x1="518.4" y1="148.0" x2="518.4" y2="152.0" class="volume-tick" /><text x="518.4" y="155.0" class="volume-hour-label" transform="rotate(-60 518.4 155.0)">1pm</text><text x="518.4" y="29.0" class="volume-dollar-label" transform="rotate(-60 518.4 29.0)">$0</text><rect x="533.2" y="147.8" width="23.5" height="1.0" class="volume-bar"><title>2pm: 1 contracts (≈$0)</title></rect><line x1="544.9" y1="148.0" x2="544.9" y2="152.0" class="volume-tick" /><text x="544.9" y="155.0" class="volume-hour-label" transform="rotate(-60 544.9 155.0)">2pm</text><text x="544.9" y="29.0" class="volume-dollar-label" transform="rotate(-60 544.9 29.0)">$0</text><rect x="559.6" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>3pm: 0 contracts (≈$0)</title></rect><line x1="571.4" y1="148.0" x2="571.4" y2="152.0" class="volume-tick" /><text x="571.4" y="155.0" class="volume-hour-label" transform="rotate(-60 571.4 155.0)">3pm</text><text x="571.4" y="29.0" class="volume-dollar-label" transform="rotate(-60 571.4 29.0)">$0</text><rect x="586.1" y="148.0" width="23.5" height="1.0" class="volume-bar"><title>4pm: 0 contracts (≈$0)</title></rect><line x1="597.8" y1="148.0" x2="597.8" y2="152.0" class="volume-tick" /><text x="597.8" y="155.0" class="volume-hour-label" transform="rotate(-60 597.8 155.0)">4pm</text><text x="597.8" y="29.0" class="volume-dollar-label" transform="rotate(-60 597.8 29.0)">$0</text><rect x="612.5" y="143.2" width="23.5" height="4.8" class="volume-bar"><title>5pm: 21 contracts (≈$8)</title></rect><line x1="624.3" y1="148.0" x2="624.3" y2="152.0" class="volume-tick" /><text x="624.3" y="155.0" class="volume-hour-label" transform="rotate(-60 624.3 155.0)">5pm</text><text x="624.3" y="29.0" class="volume-dollar-label" transform="rotate(-60 624.3 29.0)">$8</text>
+</svg>
+      <div class="hint">Contract count matches Kalshi's own "Volume" figure. The dollar amount is our own estimate (contracts × that hour's average price) since Kalshi doesn't publish a dollar total directly.</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Weekly performance · high (7 of 7 days)</div>
+      <div class="perf-scroll"><table class="perf-table"><thead><tr><th>Date</th><th>Predicted</th><th>1h before pred.</th><th>Actual</th><th>1h before actual</th><th>Temp Δ</th><th>Time Δ</th><th>Kalshi peak vol.</th><th>Kalshi implied</th></tr></thead><tbody><tr><td>07-21</td><td>—</td><td>—°</td><td>5:05pm · 93.2°</td><td>91.4°</td><td>—</td><td>— min</td><td>19,836 <span class="perf-subtle">@ 4:45pm</span></td><td>92° <span class="perf-subtle">(92° to 93°)</span></td></tr><tr><td>07-20</td><td>—</td><td>—°</td><td>4:20pm · 82.4°</td><td>78.8°</td><td>—</td><td>— min</td><td>7,536 <span class="perf-subtle">@ 11:00pm</span></td><td>82° <span class="perf-subtle">(81° to 82°)</span></td></tr><tr><td>07-19</td><td>—</td><td>—°</td><td>4:10pm · 78.8°</td><td>75.2°</td><td>—</td><td>— min</td><td>6,976 <span class="perf-subtle">@ 4:30pm</span></td><td>78° <span class="perf-subtle">(77° to 78°)</span></td></tr><tr><td>07-18</td><td>—</td><td>—°</td><td>4:53pm · 73.9°</td><td>73.0°</td><td>—</td><td>— min</td><td>2,444 <span class="perf-subtle">@ 4:30pm</span></td><td>74° <span class="perf-subtle">(74° to 75°)</span></td></tr><tr><td>07-17</td><td>—</td><td>—°</td><td>3:40pm · 71.6°</td><td>68.0°</td><td>—</td><td>— min</td><td>1,846 <span class="perf-subtle">@ 6:45pm</span></td><td>73° <span class="perf-subtle">(73° or below)</span></td></tr><tr><td>07-16 <span class="perf-flag" title="peak time landed at an implausible hour - likely a station data gap, not a real physical peak">⚠</span></td><td>—</td><td>—°</td><td>12:00am · 66.2°</td><td>—°</td><td>—</td><td>— min</td><td>3,951 <span class="perf-subtle">@ 3:15pm</span></td><td>72° <span class="perf-subtle">(71° to 72°)</span></td></tr><tr><td>07-15</td><td>—</td><td>—°</td><td>4:53pm · 82.9°</td><td>82.0°</td><td>—</td><td>— min</td><td>5,600 <span class="perf-subtle">@ 4:45pm</span></td><td>84° <span class="perf-subtle">(83° to 84°)</span></td></tr></tbody></table><div class="perf-flag-caption"><div>⚠ 07-16: peak time landed at an implausible hour - likely a station data gap, not a real physical peak</div></div></div>
+      <div class="hint">Trailing 7 days, most recent first. Predictions only appear once calibration_log.py has logged them (recent addition) - actual/Kalshi columns work back further.</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Weekly performance · low (7 of 7 days)</div>
+      <div class="perf-scroll"><table class="perf-table"><thead><tr><th>Date</th><th>Predicted</th><th>1h before pred.</th><th>Actual</th><th>1h before actual</th><th>Temp Δ</th><th>Time Δ</th><th>Kalshi peak vol.</th><th>Kalshi implied</th></tr></thead><tbody><tr><td>07-21</td><td>—</td><td>—°</td><td>6:40am · 62.6°</td><td>64.4°</td><td>—</td><td>— min</td><td>3,025 <span class="perf-subtle">@ 6:30am</span></td><td>62° <span class="perf-subtle">(62° to 63°)</span></td></tr><tr><td>07-20</td><td>—</td><td>—°</td><td>4:53am · 60.1°</td><td>62.1°</td><td>—</td><td>— min</td><td>843 <span class="perf-subtle">@ 6:30am</span></td><td>60° <span class="perf-subtle">(60° or above)</span></td></tr><tr><td>07-19</td><td>—</td><td>—°</td><td>6:00am · 55.4°</td><td>57.2°</td><td>—</td><td>— min</td><td>401 <span class="perf-subtle">@ 4:45am</span></td><td>56° <span class="perf-subtle">(56° to 57°)</span></td></tr><tr><td>07-18</td><td>—</td><td>—°</td><td>5:15am · 55.4°</td><td>59.0°</td><td>—</td><td>— min</td><td>1,420 <span class="perf-subtle">@ 5:15am</span></td><td>56° <span class="perf-subtle">(55° to 56°)</span></td></tr><tr><td>07-17</td><td>—</td><td>—°</td><td>12:00am · 57.2°</td><td>—°</td><td>—</td><td>— min</td><td>779 <span class="perf-subtle">@ 6:45pm</span></td><td>56° <span class="perf-subtle">(56° to 57°)</span></td></tr><tr><td>07-16</td><td>—</td><td>—°</td><td>7:53am · 55.0°</td><td>55.9°</td><td>—</td><td>— min</td><td>1,287 <span class="perf-subtle">@ 6:30am</span></td><td>56° <span class="perf-subtle">(55° to 56°)</span></td></tr><tr><td>07-15</td><td>—</td><td>—°</td><td>7:53am · 61.0°</td><td>—°</td><td>—</td><td>— min</td><td>1,178 <span class="perf-subtle">@ 4:15am</span></td><td>58° <span class="perf-subtle">(57° to 58°)</span></td></tr></tbody></table></div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Monthly performance · July 2026</div>
+      
+      <div class="module-label" style="margin-top: 4px;">High</div>
+      <div class="range-row"><span class="range-label">Mean Kalshi peak volume</span><span class="range-values">6,884 contracts</span></div>
+<div class="hint">No model predictions logged yet this month - calibration_log.py only started capturing pre-peak predictions recently.</div>
+      <div class="module-label" style="margin-top: 16px;">Low</div>
+      <div class="range-row"><span class="range-label">Mean Kalshi peak volume</span><span class="range-values">1,276 contracts</span></div>
+<div class="hint">No model predictions logged yet this month - calibration_log.py only started capturing pre-peak predictions recently.</div>
+      <div class="hint">Bias/MAE use the same (predicted − actual) sign convention as the backtest above. Positive bias means the model's prediction ran warm/high or late; negative means it ran cool/low or early.</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Paper trading · trailing 7 days</div>
+      <div class="module-label">1hr before peak</div><div class="hint">No simulated bets placed yet in this window.</div>
+<div class="module-label" style="margin-top: 16px;">2hr before peak</div><div class="hint">No simulated bets placed yet in this window.</div>
+      <div class="hint">Simulated only - no real orders placed. A bet is logged when the model's own (backtest-calibrated) probability disagrees with Kalshi's price by at least 15 points - independently at ~1hr and ~2hr before the predicted peak, so the two lead times can be compared rather than picking one upfront. Kept separate on purpose - see the two blocks below.</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Paper trading · July 2026</div>
+      <div class="module-label">1hr before peak</div><div class="hint">No simulated bets placed yet in this window.</div>
+<div class="module-label" style="margin-top: 16px;">2hr before peak</div><div class="hint">No simulated bets placed yet in this window.</div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Conditions</div>
+      <div class="stats">
+        <div class="stat">
+          <div class="label">Wind</div>
+          <div class="value">8.10 mph</div>
+        </div>
+        <div class="stat">
+          <div class="label">Cloud cover</div>
+          <div class="value cloud-value">
+            <svg viewBox="0 0 24 24" width="30" height="30" class="cloud-icon" role="img" aria-label="0% cloud cover">
+  <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" class="cloud-icon-outline" />
+  <clipPath id="cloud-fill-clip"><rect x="0" y="24.00" width="24" height="0.00" /></clipPath>
+  <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" class="cloud-icon-fill" clip-path="url(#cloud-fill-clip)" />
+</svg>
+            <span>—</span>
+          </div>
+        </div>
+        <div class="stat">
+          <div class="label">Pressure</div>
+          <div class="value"><span class="chip chip-neutral">steady</span></div>
+        </div>
+        <div class="stat">
+          <div class="label">Trend confidence</div>
+          <div class="value">31%</div>
+        </div>
+        <div class="stat">
+          <div class="label">Marine push</div>
+          <div class="value"><span class="chip chip-neutral">steady</span></div>
+          <div class="perf-subtle" style="margin-top: 2px;">via KORS</div>
+        </div>
+        <div class="stat">
+          <div class="label">Offshore flow</div>
+          <div class="value"><span class="chip chip-neutral">steady</span></div>
+          <div class="perf-subtle" style="margin-top: 2px;">via KELN</div>
+        </div>
+      </div>
+      <div class="hint">Trend confidence is how much the model trusts its own short-term extrapolation right now - not confidence in the readings above. It's deliberately low near sunrise or the day's peak-heat hour, since the trend is about to reverse there regardless of how strong it looks right before. Marine push (coastal/strait pressure gradient) and offshore flow (interior gap-wind gradient) are two distinguishable patterns behind Seattle temperature swings - the latter is the mechanism behind most real heat events, not just solar heating. Both are still first-pass signals, not yet calibrated against real outcomes (see calibration log).</div>
+    </div>
+
+    <div>
+      <div class="module-label">Verify the data</div>
+      <div class="data-links">
+        <a href="https://api.weather.gov/stations/KSEA/observations" target="_blank" rel="noopener">Raw station data (JSON)</a>
+        <a href="https://forecast.weather.gov/data/obhistory/KSEA.html" target="_blank" rel="noopener">NWS observation history</a>
+        <a href="https://forecast.weather.gov/MapClick.php?lat=47.4447&lon=-122.3136" target="_blank" rel="noopener">Official NWS forecast</a>
+        <a href="https://www.weather.gov/wrh/timeseries?site=KSEA" target="_blank" rel="noopener">NWS time series chart</a>
+      </div>
+    </div>
+
+    <div class="footer">
+      Model estimate from 8 recent station observations — not an official NWS forecast. Refreshes on a schedule; numbers reflect the last refresh, not this exact moment.
+      <br>Estimates shown against Kalshi's pricing are this tool's own in-house model (trend + diurnal shape + NWS blend), not independently validated — backtesting so far shows a typical error of a few degrees. Treat the bracket match as a rough gut-check, not a trading signal.
+    </div>
+  </div>
+</div>

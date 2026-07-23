@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 .env
+
+# Local Claude Code session settings - machine/session-specific, not project config
+.claude/

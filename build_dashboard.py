@@ -1,11 +1,20 @@
 """
 Renders weather_estimator's live KSEA estimate into a static HTML dashboard.
 
-Run standalone to regenerate dashboard.html in this directory:
+Output path: defaults to docs/index.html (relative to this file's
+directory) so a plain `python3 build_dashboard.py` produces something
+GitHub Pages can serve directly from this repo's docs/ folder - no
+separate publish step required. Override with the DASHBOARD_OUTPUT_PATH
+env var for any other destination (e.g. the Claude Code session's own
+scratch directory, when publishing to the claude.ai Artifact instead).
+
+Run standalone to regenerate the dashboard:
     python3 build_dashboard.py
+    DASHBOARD_OUTPUT_PATH=/some/other/path.html python3 build_dashboard.py
 """
 
 import json
+import os
 from datetime import date, datetime, timedelta
 
 from weather_estimator import (
@@ -706,7 +715,9 @@ def main():
     for key, value in ctx.items():
         template = template.replace("{{" + key + "}}", str(value))
 
-    out_path = "/tmp/claude-0/-home-user-weather/805f9339-6e9f-5b7a-a9f0-f3408e81362c/scratchpad/ksea_dashboard.html"
+    default_out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "index.html")
+    out_path = os.environ.get("DASHBOARD_OUTPUT_PATH", default_out_path)
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w") as f:
         f.write(template)
 
