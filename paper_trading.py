@@ -58,6 +58,18 @@ a conservative bar given the model's still-modest calibration. Both lead
 times apply this same threshold independently - it's fine for one to
 clear it and not the other on a given day.
 
+Edge logging: MIN_EDGE being conservative means most days place zero
+bets, which starves daily_performance.py's win-rate stats but also
+throws away the one thing that could tell us whether 15 points is
+actually well-calibrated - how big the model/Kalshi disagreement was on
+the days that DIDN'T clear it. So every time place_paper_trade evaluates
+a market (whether or not the edge clears MIN_EDGE), the best edge found
+is appended to EDGE_LOG_PATH - deliberately every evaluation, not just
+"close" ones, since deciding what counts as "close" is the open question
+here and pre-filtering on a second guessed cutoff would just hide the
+same problem one level down. `python3 paper_trading.py edge-stats`
+summarizes that log's distribution.
+
 Real-money guardrails (documented, NOT implemented - this module never
 places a real order):
   - hard daily cap on number of real bets and total dollar exposure
@@ -75,6 +87,7 @@ CLI:
     python3 paper_trading.py place low 2hr
     python3 paper_trading.py lock-2hr             # lock in today's 2hr targets
     python3 paper_trading.py status
+    python3 paper_trading.py edge-stats           # distribution of every edge found, bet or not
 """
 
 import json
@@ -88,6 +101,7 @@ from kalshi import HIGH_SERIES, LOW_SERIES, get_market_for_date, bracket_contain
 STATION = "KSEA"
 PENDING_PATH = os.path.join(os.path.dirname(__file__), "paper_trades_pending.json")
 SCHEDULE_2HR_PATH = os.path.join(os.path.dirname(__file__), "paper_trading_2hr_schedule.json")
+EDGE_LOG_PATH = os.path.join(os.path.dirname(__file__), "paper_trading_edge_log.jsonl")
 
 LEAD_TIME_HINTS = ("1hr", "2hr")
 LEAD_2HR_HOURS = 2
@@ -161,6 +175,67 @@ def _save_pending(pending):
         json.dump(pending, f, indent=2)
 
 
+def _log_edge_evaluation(record):
+    with open(EDGE_LOG_PATH, "a") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def _load_edge_log():
+    if not os.path.exists(EDGE_LOG_PATH):
+        return []
+    records = []
+    with open(EDGE_LOG_PATH) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
+    return records
+
+
+def edge_log_stats():
+    """
+    Summarizes the edge log so MIN_EDGE can be judged against real data
+    instead of a guess: how often the model finds an edge at all, how big
+    those edges typically are, and specifically how close the near-misses
+    (edge found but below MIN_EDGE) got - the population MIN_EDGE would
+    need to move to catch.
+    """
+    records = _load_edge_log()
+    if not records:
+        return {"count": 0}
+
+    edges = [r["edge"] for r in records]
+    no_bet = [r for r in records if not r["bet_placed"]]
+    no_bet_edges = [r["edge"] for r in no_bet]
+
+    buckets = [(-math.inf, 0.0), (0.0, 0.05), (0.05, 0.10), (0.10, 0.13), (0.13, MIN_EDGE), (MIN_EDGE, math.inf)]
+    histogram = {}
+    for lo, hi in buckets:
+        label = f"{lo if lo != -math.inf else '<0'}-{hi if hi != math.inf else '+'}"
+        histogram[label] = sum(1 for e in edges if lo <= e < hi or (hi == math.inf and e >= lo))
+
+    closest_near_misses = sorted(no_bet, key=lambda r: r["edge"], reverse=True)[:10]
+
+    return {
+        "count": len(records),
+        "bets_placed": len(records) - len(no_bet),
+        "no_bet": len(no_bet),
+        "min_edge_threshold": MIN_EDGE,
+        "edge_min": round(min(edges), 4),
+        "edge_max": round(max(edges), 4),
+        "edge_mean": round(sum(edges) / len(edges), 4),
+        "no_bet_edge_mean": round(sum(no_bet_edges) / len(no_bet_edges), 4) if no_bet_edges else None,
+        "histogram": histogram,
+        "closest_near_misses": [
+            {
+                "date": r["date"], "side": r["side"], "lead_time_hint": r["lead_time_hint"],
+                "edge": r["edge"], "bucket_label": r["bucket_label"],
+            }
+            for r in closest_near_misses
+        ],
+    }
+
+
 def place_paper_trade(station_id, side, lead_time_hint="1hr"):
     """
     Compares the model's own calibrated probability against Kalshi's
@@ -220,6 +295,21 @@ def place_paper_trade(station_id, side, lead_time_hint="1hr"):
         edge = model_p - b["last_price"]
         if best is None or edge > best["edge"]:
             best = {"bracket": b, "model_p": model_p, "market_p": b["last_price"], "edge": edge}
+
+    if best is not None:
+        _log_edge_evaluation({
+            "date": date_str,
+            "side": side,
+            "lead_time_hint": lead_time_hint,
+            "evaluated_at": now.isoformat(),
+            "hours_ahead": round(hours_ahead, 2),
+            "bucket_label": best["bracket"]["label"],
+            "model_implied_probability": round(best["model_p"], 4),
+            "market_implied_probability": round(best["market_p"], 4),
+            "edge": round(best["edge"], 4),
+            "min_edge_threshold": MIN_EDGE,
+            "bet_placed": best["edge"] >= MIN_EDGE,
+        })
 
     if best is None or best["edge"] < MIN_EDGE:
         return None  # no meaningful edge today - don't force a bet
@@ -380,5 +470,7 @@ if __name__ == "__main__":
                 print(f"PAPER_TRADE_2HR_SCHEDULE_NEEDED side={side} date={date_str} target_time={side_state['target_time']}")
     elif cmd == "status":
         print(json.dumps(_load_pending(), indent=2))
+    elif cmd == "edge-stats":
+        print(json.dumps(edge_log_stats(), indent=2))
     else:
-        print(f"Unknown command: {cmd}. Use place <high|low> [1hr|2hr] | lock-2hr | status.")
+        print(f"Unknown command: {cmd}. Use place <high|low> [1hr|2hr] | lock-2hr | status | edge-stats.")
