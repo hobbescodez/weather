@@ -237,6 +237,7 @@ def _finalize_side(station_id, day, side, actuals, prediction, series_ticker, tz
 
     predicted_temp = prediction["temp_f"] if prediction else None
     predicted_time = datetime.fromisoformat(prediction["time"]) if prediction else None
+    nws_forecast_temp = prediction.get("nws_forecast_f") if prediction else None
 
     temp_1hr_before_actual = _observed_temp_at(df, actual_time - timedelta(hours=1))
     temp_1hr_before_predicted = (
@@ -247,11 +248,18 @@ def _finalize_side(station_id, day, side, actuals, prediction, series_ticker, tz
     peak_time_error_minutes = (
         round((predicted_time - actual_time).total_seconds() / 60, 1) if predicted_time is not None else None
     )
+    # Same sign convention as peak_temp_error_f (predicted/forecast minus
+    # actual) so the two are directly comparable - see module docstring
+    # and calibration_log.py's nws_high/low_forecast_at_target_f (captured
+    # at the SAME checkpoint as predicted_temp, for the same target time).
+    nws_forecast_error_f = round(nws_forecast_temp - actual_temp, 2) if nws_forecast_temp is not None else None
 
     record = {
         "predicted_peak_time": predicted_time.isoformat() if predicted_time is not None else None,
         "predicted_peak_temp": predicted_temp,
         "temp_1hr_before_predicted_peak": temp_1hr_before_predicted,
+        "nws_forecast_temp": nws_forecast_temp,
+        "nws_forecast_error_f": nws_forecast_error_f,
         "actual_peak_time": actual_time.isoformat(),
         "actual_peak_temp": actual_temp,
         "temp_1hr_before_actual_peak": temp_1hr_before_actual,
@@ -532,11 +540,17 @@ def _side_month_stats(records, side):
     time_errors = [r[side]["peak_time_error_minutes"] for r in records if r[side]["peak_time_error_minutes"] is not None]
     volumes = [r[side]["kalshi_peak_volume_contracts"] for r in records if r[side]["kalshi_peak_volume_contracts"] is not None]
     hits = [r[side]["predicted_within_kalshi_implied_bracket"] for r in records if r[side]["predicted_within_kalshi_implied_bracket"] is not None]
+    # Older records predate this field - .get() so this replays fine
+    # against an existing log that has rows from before it was added.
+    nws_errors = [r[side].get("nws_forecast_error_f") for r in records if r[side].get("nws_forecast_error_f") is not None]
 
     return {
         "n_temp_error_samples": len(temp_errors),
         "bias_f": _mean(temp_errors),
         "mae_f": _mean_abs(temp_errors),
+        "n_nws_error_samples": len(nws_errors),
+        "nws_bias_f": _mean(nws_errors),
+        "nws_mae_f": _mean_abs(nws_errors),
         "n_time_error_samples": len(time_errors),
         "time_bias_minutes": _mean(time_errors),
         "time_mae_minutes": _mean_abs(time_errors),

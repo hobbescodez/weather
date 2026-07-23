@@ -51,11 +51,19 @@ def record_snapshot(extremes, est=None):
         "high_status": extremes["high_status"],
         "estimated_high_f": extremes["estimated_high_f"],
         "estimated_high_time": extremes["estimated_high_time"].isoformat(),
+        # NWS's own hourly-forecast value for this same target time,
+        # captured at this same checkpoint - only set while high_status ==
+        # "projected" (see weather_estimator.estimate_daily_extremes). Lets
+        # daily_performance.py compare model vs. NWS vs. actual for the
+        # exact same moment, instead of just "do they agree today" with no
+        # record of which one was actually closer.
+        "nws_high_forecast_at_target_f": extremes.get("nws_high_forecast_at_target_f"),
         "observed_high_so_far_f": extremes["observed_high_so_far_f"],
         "observed_high_so_far_time": extremes["observed_high_so_far_time"].isoformat(),
         "low_status": extremes["low_status"],
         "estimated_low_f": extremes["estimated_low_f"],
         "estimated_low_time": extremes["estimated_low_time"].isoformat(),
+        "nws_low_forecast_at_target_f": extremes.get("nws_low_forecast_at_target_f"),
         "observed_low_so_far_f": extremes["observed_low_so_far_f"],
         "observed_low_so_far_time": extremes["observed_low_so_far_time"].isoformat(),
         "tomorrow_high_f": extremes["tomorrow_high_f"],
@@ -97,13 +105,19 @@ def get_last_prediction(date_str):
     pre_peak = [r for r in rows if r["high_status"] == "projected"]
     if pre_peak:
         last = pre_peak[-1]
-        high = {"temp_f": last["estimated_high_f"], "time": last["estimated_high_time"]}
+        high = {
+            "temp_f": last["estimated_high_f"], "time": last["estimated_high_time"],
+            "nws_forecast_f": last.get("nws_high_forecast_at_target_f"),
+        }
 
     low = None
     pre_dawn = [r for r in rows if r["low_status"] == "today"]
     if pre_dawn:
         last = pre_dawn[-1]
-        low = {"temp_f": last["estimated_low_f"], "time": last["estimated_low_time"]}
+        low = {
+            "temp_f": last["estimated_low_f"], "time": last["estimated_low_time"],
+            "nws_forecast_f": last.get("nws_low_forecast_at_target_f"),
+        }
 
     return {"high": high, "low": low}
 

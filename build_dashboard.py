@@ -23,6 +23,7 @@ from weather_estimator import (
     get_station_location,
     get_observation_history,
     get_sun_times,
+    get_hourly_forecast,
     MARINE_PUSH_INDEX_THRESHOLD,
     OFFSHORE_FLOW_INDEX_THRESHOLD,
 )
@@ -35,6 +36,14 @@ from paper_trading import get_or_lock_2hr_targets, LEAD_TIME_HINTS
 STATION = "KSEA"
 HOURS_AHEAD = 3
 SPARKLINE_HOURS = 6
+
+# Second location: Seattle proper (Fremont/Aurora area), ~15 miles from
+# Sea-Tac and a genuinely different microclimate (closer to Lake Union/
+# marine moderation - Sea-Tac runs warmer in summer). This is a much
+# lighter-weight panel than the KSEA one on purpose - see module docstring
+# note in the Fremont section below for what's deliberately NOT built here.
+FREMONT_LAT, FREMONT_LON = 47.6511, -122.3547  # Fremont Bridge / Aurora Ave N area
+FREMONT_OBS_STATION = "KBFI"  # Boeing Field - nearest full ASOS station with real ground-truth obs (still ~5-6mi off)
 
 
 def _fmt_time(ts):
@@ -209,7 +218,7 @@ def build_weekly_performance_table(rows, side):
     fields - wrapped in a horizontally-scrolling container by the
     template since there are too many columns for a phone-width card."""
     header = (
-        "<tr><th>Date</th><th>Predicted</th><th>1h before pred.</th>"
+        "<tr><th>Date</th><th>Predicted</th><th>1h before pred.</th><th>NWS 1h before</th>"
         "<th>Actual</th><th>1h before actual</th>"
         "<th>Temp Δ</th><th>Time Δ</th>"
         "<th>Kalshi peak vol.</th><th>Kalshi implied</th></tr>"
@@ -222,7 +231,7 @@ def build_weekly_performance_table(rows, side):
         s = r.get(side)
         date_label = r["date"][5:]  # MM-DD is plenty given the 7-day window
         if not s:
-            body.append(f'<tr><td>{date_label}</td><td colspan="8" class="perf-nodata">no data</td></tr>')
+            body.append(f'<tr><td>{date_label}</td><td colspan="9" class="perf-nodata">no data</td></tr>')
             continue
 
         if s.get("data_quality_flag"):
@@ -243,11 +252,15 @@ def build_weekly_performance_table(rows, side):
             f"{s['kalshi_market_implied_value']:.0f}° <span class=\"perf-subtle\">({s['kalshi_market_implied_bracket']})</span>"
             if s["kalshi_market_implied_value"] is not None else "—"
         )
+        nws_1hr_before = (
+            f"{_fmt_num(s['nws_forecast_temp'])}°" if s.get("nws_forecast_temp") is not None else "—"
+        )
         body.append(
             "<tr>"
             f"<td>{date_label}{flag}</td>"
             f"<td>{predicted}</td>"
             f"<td>{_fmt_num(s['temp_1hr_before_predicted_peak'])}°</td>"
+            f"<td>{nws_1hr_before}</td>"
             f"<td>{actual}</td>"
             f"<td>{_fmt_num(s['temp_1hr_before_actual_peak'])}°</td>"
             f"<td>{_fmt_num(s['peak_temp_error_f'], 2, sign=True) if s['peak_temp_error_f'] is not None else '—'}</td>"
@@ -269,6 +282,7 @@ def build_weekly_performance_table(rows, side):
 def build_monthly_stats_rows(stats):
     has_anything = (
         stats["n_temp_error_samples"] > 0
+        or stats.get("n_nws_error_samples", 0) > 0
         or stats["mean_kalshi_peak_volume_contracts"] is not None
         or stats["n_hit_samples"] > 0
     )
@@ -282,6 +296,18 @@ def build_monthly_stats_rows(stats):
     if stats["n_temp_error_samples"] > 0:
         rows.append(row("Temp bias (signed)", f"{_fmt_num(stats['bias_f'], 2, sign=True)}°F ({stats['n_temp_error_samples']} days)"))
         rows.append(row("Temp MAE", f"{_fmt_num(stats['mae_f'], 2)}°F"))
+    if stats.get("n_nws_error_samples", 0) > 0:
+        rows.append(row("NWS bias (signed)", f"{_fmt_num(stats['nws_bias_f'], 2, sign=True)}°F ({stats['n_nws_error_samples']} days)"))
+        rows.append(row("NWS MAE", f"{_fmt_num(stats['nws_mae_f'], 2)}°F"))
+    if stats["n_temp_error_samples"] > 0 and stats.get("n_nws_error_samples", 0) > 0:
+        diff = round(stats["mae_f"] - stats["nws_mae_f"], 2)
+        if diff < 0:
+            comparison = f"model's MAE is {abs(diff):.2f}°F lower (better) than NWS's this month"
+        elif diff > 0:
+            comparison = f"model's MAE is {diff:.2f}°F higher (worse) than NWS's this month"
+        else:
+            comparison = "model and NWS MAE are tied this month"
+        rows.append(f'<div class="hint">{comparison}.</div>')
     if stats["time_bias_minutes"] is not None:
         rows.append(row("Peak-time bias (signed)", f"{_fmt_num(stats['time_bias_minutes'], 0, sign=True)} min"))
         rows.append(row("Peak-time MAE", f"{_fmt_num(stats['time_mae_minutes'], 0)} min"))
@@ -614,6 +640,42 @@ def main():
     is_day = sunrise_h <= now_h < sunset_h
     condition_text, sky_class = sky_condition(cloud_pct, is_day)
 
+    # Second location: Seattle proper (Fremont/Aurora) - see FREMONT_LAT/LON
+    # note above. Deliberately simple: real ground-truth conditions from
+    # the nearest full ASOS station (KBFI), plus NWS's own gridpoint
+    # forecast for Fremont's actual coordinates - no trend/gradient-network/
+    # backtesting machinery, and never blended into the KSEA numbers above.
+    try:
+        fremont_obs = get_observation_history(FREMONT_OBS_STATION, limit=1)
+        fremont_latest = fremont_obs.iloc[-1]
+        fremont_current_temp = fremont_latest["temp_f"]
+        fremont_wind_mph = fremont_latest["wind_mph"]
+        fremont_cloud_fraction = fremont_latest["cloud_fraction"]
+        fremont_obs_time = fremont_latest["time"]
+    except Exception as e:
+        print(f"Fremont/{FREMONT_OBS_STATION} observation fetch failed: {e}")
+        fremont_current_temp = fremont_wind_mph = fremont_cloud_fraction = fremont_obs_time = None
+
+    try:
+        fremont_forecast_df = get_hourly_forecast(FREMONT_LAT, FREMONT_LON, hours=24)
+        fremont_today_forecast = fremont_forecast_df[fremont_forecast_df["time"].dt.date == now.date()]
+        if fremont_today_forecast.empty:
+            raise ValueError("forecast didn't include today's date")
+        f_high_row = fremont_today_forecast.loc[fremont_today_forecast["forecast_temp_f"].idxmax()]
+        f_low_row = fremont_today_forecast.loc[fremont_today_forecast["forecast_temp_f"].idxmin()]
+        fremont_forecast_high = float(f_high_row["forecast_temp_f"])
+        fremont_forecast_high_time = f_high_row["time"]
+        fremont_forecast_low = float(f_low_row["forecast_temp_f"])
+        fremont_forecast_low_time = f_low_row["time"]
+    except Exception as e:
+        print(f"Fremont NWS gridpoint forecast fetch failed: {e}")
+        fremont_forecast_high = fremont_forecast_high_time = None
+        fremont_forecast_low = fremont_forecast_low_time = None
+
+    fremont_condition_text = (
+        sky_condition(fremont_cloud_fraction, is_day)[0] if fremont_cloud_fraction is not None else "—"
+    )
+
     obs_json_url = f"https://api.weather.gov/stations/{STATION}/observations"
     obhistory_url = f"https://forecast.weather.gov/data/obhistory/{STATION}.html"
     forecast_url = f"https://forecast.weather.gov/MapClick.php?lat={lat:.4f}&lon={lon:.4f}"
@@ -736,6 +798,14 @@ def main():
         "monthly_low_stats": build_monthly_stats_rows(monthly_perf["low"]),
         "weekly_paper_trading": build_paper_trading_rows(weekly_perf["paper_trading"]),
         "monthly_paper_trading": build_paper_trading_rows(monthly_perf["paper_trading"]),
+        "fremont_current_temp": f"{fremont_current_temp:.1f}" if fremont_current_temp is not None else "—",
+        "fremont_condition_text": fremont_condition_text,
+        "fremont_obs_time": _fmt_time(fremont_obs_time) if fremont_obs_time is not None else "—",
+        "fremont_wind_mph": f"{fremont_wind_mph:.1f}" if fremont_wind_mph is not None else "—",
+        "fremont_forecast_high": f"{fremont_forecast_high:.1f}" if fremont_forecast_high is not None else "—",
+        "fremont_forecast_high_time": _fmt_time(fremont_forecast_high_time) if fremont_forecast_high_time is not None else "—",
+        "fremont_forecast_low": f"{fremont_forecast_low:.1f}" if fremont_forecast_low is not None else "—",
+        "fremont_forecast_low_time": _fmt_time(fremont_forecast_low_time) if fremont_forecast_low_time is not None else "—",
         "sky_class": sky_class,
         "condition_text": condition_text,
         "obs_json_url": obs_json_url,

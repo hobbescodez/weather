@@ -945,6 +945,31 @@ def estimate_daily_extremes(station_id, obs_limit=8):
                 estimated_low = current_temp
             low_source = "dewpoint_fallback"
 
+    # NWS's own hourly-forecast value at THIS model's still-pending
+    # extreme's target time (today's peak-heat hour, or dawn if the low
+    # hasn't happened yet) - captured here, at the same checkpoint
+    # calibration_log.py logs this model's own last pre-peak/pre-dawn
+    # prediction, so the two can be compared against the same eventual
+    # actual later (see daily_performance.py's nws_forecast_error_f).
+    # Only meaningful while that extreme is still pending: once it's
+    # already observed, there's no forecast-vs-actual comparison left to
+    # make for that checkpoint. NWS's forecastHourly only covers the
+    # future, so this can't be reconstructed retroactively - it has to be
+    # captured live, right here, or the comparison is lost for that day.
+    nws_high_forecast_at_target_f = None
+    nws_low_forecast_at_target_f = None
+    if high_status == "projected" or low_status == "today":
+        try:
+            pending_forecast_df = get_hourly_forecast(lat, lon, hours=24)
+            if high_status == "projected":
+                v = _nws_forecast_temp_at(pending_forecast_df, high_time)
+                nws_high_forecast_at_target_f = round(float(v), 1) if v is not None else None
+            if low_status == "today":
+                v = _nws_forecast_temp_at(pending_forecast_df, low_time)
+                nws_low_forecast_at_target_f = round(float(v), 1) if v is not None else None
+        except Exception:
+            pass  # NWS forecast unavailable - leave both None, not a hard failure
+
     # Tomorrow's high and low: prefer the actual NWS gridpoint forecast
     # (HRRR-based, real atmospheric dynamics - it can see a heat event
     # building that nothing in this station's own recent data would show
@@ -1026,8 +1051,10 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         "estimated_high_time": high_time,  # theoretical peak-heat hour for today, from sun position - not tied to when the observed high actually occurred
         "estimated_low_time": low_time,  # theoretical sunrise (today's or tomorrow's) - not tied to when the observed low actually occurred
         "high_status": high_status,
+        "nws_high_forecast_at_target_f": nws_high_forecast_at_target_f,  # NWS's own forecast for high_time, only while high_status == "projected"
         "estimated_low_f": round(estimated_low, 1),
         "low_status": low_status,
+        "nws_low_forecast_at_target_f": nws_low_forecast_at_target_f,  # NWS's own forecast for low_time, only while low_status == "today"
         "low_source": low_source,  # "trend_model", "nws_forecast", or "dewpoint_fallback"
         "observed_high_so_far_f": round(observed_high, 2),
         "observed_high_so_far_time": observed_high_time,  # when that actual high was recorded

@@ -735,6 +735,32 @@
       <div class="hint">Trend confidence is how much the model trusts its own short-term extrapolation right now - not confidence in the readings above. It's deliberately low near sunrise or the day's peak-heat hour, since the trend is about to reverse there regardless of how strong it looks right before. Marine push (coastal/strait pressure gradient) and offshore flow (interior gap-wind gradient) are two distinguishable patterns behind Seattle temperature swings - the latter is the mechanism behind most real heat events, not just solar heating. Both are still first-pass signals, not yet calibrated against real outcomes (see calibration log).</div>
     </div>
 
+    <div class="glass">
+      <div class="module-label">Seattle (Fremont) · NWS gridpoint forecast</div>
+      <div class="estimate-row">
+        <span class="estimate-value">{{fremont_current_temp}}°</span>
+        <span class="estimate-label">{{fremont_condition_text}} · KBFI, {{fremont_obs_time}}</span>
+      </div>
+      <div class="range-row">
+        <span class="range-label">Wind</span>
+        <span class="range-values">{{fremont_wind_mph}} mph</span>
+      </div>
+      <div class="module-label" style="margin-top: 16px;">Today, per NWS</div>
+      <div class="hilo-detail-row">
+        <div class="hilo-detail">
+          <span class="hilo-detail-arrow hilo-arrow-high">↑</span>
+          <span class="hilo-value">{{fremont_forecast_high}}°</span>
+          <span class="hilo-detail-caption">forecast high ~{{fremont_forecast_high_time}}</span>
+        </div>
+        <div class="hilo-detail">
+          <span class="hilo-detail-arrow hilo-arrow-low">↓</span>
+          <span class="hilo-value">{{fremont_forecast_low}}°</span>
+          <span class="hilo-detail-caption">forecast low ~{{fremont_forecast_low_time}}</span>
+        </div>
+      </div>
+      <div class="hint">A separate, closer-to-home comparison point - not part of the KSEA model above, and not blended into it. Sea-Tac Airport runs warmer than Fremont in summer (further from Lake Union/marine moderation), so treat these as two different microclimates. Current conditions are real observations from KBFI (Boeing Field, nearest full ASOS station - still ~5-6mi from Fremont). The high/low is NWS's own HRRR-based forecast for Fremont's actual coordinates, not this tool's in-house trend/gradient-network model - no backtesting or paper trading behind these numbers yet.</div>
+    </div>
+
     <div>
       <div class="module-label">Verify the data</div>
       <div class="data-links">
