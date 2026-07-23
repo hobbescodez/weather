@@ -500,16 +500,27 @@ def main():
     # nearly-empty event as if it were "today's" actively-trading one.
     today = now.date()
     tomorrow = today + timedelta(days=1)
+    # get_market_for_date itself returns None for a genuine "no open event
+    # for this date yet" - a normal, expected state, especially for
+    # tomorrow's markets before Kalshi opens them. A raised exception here
+    # is a different thing entirely (a transient network hiccup or Kalshi
+    # rate-limiting - both observed in practice), so it's tracked
+    # separately rather than collapsed into the same "no market" None the
+    # UI would otherwise show identically for both cases.
+    kalshi_high_error = None
     try:
         kalshi_high = get_market_for_date(HIGH_SERIES, today)
     except Exception as e:
         print(f"Kalshi high market fetch failed: {e}")
         kalshi_high = None
+        kalshi_high_error = str(e)
+    kalshi_low_error = None
     try:
         kalshi_low = get_market_for_date(LOW_SERIES, today)
     except Exception as e:
         print(f"Kalshi low market fetch failed: {e}")
         kalshi_low = None
+        kalshi_low_error = str(e)
 
     try:
         high_volume = get_event_hourly_volume(HIGH_SERIES, kalshi_high["brackets"], hours=24) if kalshi_high else None
@@ -521,16 +532,20 @@ def main():
     except Exception as e:
         print(f"Kalshi low volume fetch failed: {e}")
         low_volume = None
+    kalshi_tomorrow_high_error = None
     try:
         kalshi_tomorrow_high = get_market_for_date(HIGH_SERIES, tomorrow)
     except Exception as e:
         print(f"Kalshi tomorrow high market fetch failed: {e}")
         kalshi_tomorrow_high = None
+        kalshi_tomorrow_high_error = str(e)
+    kalshi_tomorrow_low_error = None
     try:
         kalshi_tomorrow_low = get_market_for_date(LOW_SERIES, tomorrow)
     except Exception as e:
         print(f"Kalshi tomorrow low market fetch failed: {e}")
         kalshi_tomorrow_low = None
+        kalshi_tomorrow_low_error = str(e)
 
     try:
         tomorrow_high_volume = get_event_hourly_volume(HIGH_SERIES, kalshi_tomorrow_high["brackets"], hours=24) if kalshi_tomorrow_high else None
@@ -573,7 +588,15 @@ def main():
     offshore_flow_label, offshore_flow_class = index_chip(est["offshore_flow_index"], OFFSHORE_FLOW_INDEX_THRESHOLD, "rising")
     strait_signal = est.get("strait_signal") or {}
     interior_gap_signal = est.get("interior_gap_signal") or {}
-    marine_push_meta = f"via {strait_signal['station']}" if strait_signal.get("station") else "coastal only"
+    coastal_gradient_station = est.get("pressure_gradient_station")
+    if coastal_gradient_station and strait_signal.get("station"):
+        marine_push_meta = f"via {coastal_gradient_station} + {strait_signal['station']}"
+    elif coastal_gradient_station:
+        marine_push_meta = f"via {coastal_gradient_station}"
+    elif strait_signal.get("station"):
+        marine_push_meta = f"via {strait_signal['station']}"
+    else:
+        marine_push_meta = "no station data available"
     offshore_flow_meta = f"via {interior_gap_signal['station']}" if interior_gap_signal.get("station") else "no interior station available"
     uncertainty_note_html = (
         f'<div class="hint" style="margin-top: 6px;">Widened: {est["uncertainty_note"]}.</div>'
@@ -660,7 +683,10 @@ def main():
         "kalshi_high_rows": build_kalshi_rows(
             kalshi_high["brackets"], extremes["estimated_high_f"],
             "Observed high" if extremes["high_status"] == "observed" else "Estimated high",
-        ) if kalshi_high else '<div class="hint">Market unavailable.</div>',
+        ) if kalshi_high else (
+            '<div class="hint">Temporarily unable to reach Kalshi for today\'s high market - try refreshing shortly.</div>'
+            if kalshi_high_error else '<div class="hint">No open market for today\'s high yet.</div>'
+        ),
         "kalshi_low_ticker": kalshi_low["event_ticker"] if kalshi_low else "no open market",
         # Today's Kalshi low market settles on TODAY's calendar-day low. Once
         # that's already happened (low_status == "tonight"), estimated_low_f
@@ -671,11 +697,20 @@ def main():
             kalshi_low["brackets"],
             extremes["observed_low_so_far_f"] if extremes["low_status"] == "tonight" else extremes["estimated_low_f"],
             "Observed low" if extremes["low_status"] == "tonight" else "Estimated low",
-        ) if kalshi_low else '<div class="hint">Market unavailable.</div>',
+        ) if kalshi_low else (
+            '<div class="hint">Temporarily unable to reach Kalshi for today\'s low market - try refreshing shortly.</div>'
+            if kalshi_low_error else '<div class="hint">No open market for today\'s low yet.</div>'
+        ),
         "kalshi_tomorrow_high_ticker": kalshi_tomorrow_high["event_ticker"] if kalshi_tomorrow_high else "no open market",
-        "kalshi_tomorrow_high_rows": build_kalshi_rows(kalshi_tomorrow_high["brackets"], extremes["tomorrow_high_f"], "Estimated high") if kalshi_tomorrow_high else '<div class="hint">Market not open yet.</div>',
+        "kalshi_tomorrow_high_rows": build_kalshi_rows(kalshi_tomorrow_high["brackets"], extremes["tomorrow_high_f"], "Estimated high") if kalshi_tomorrow_high else (
+            '<div class="hint">Temporarily unable to reach Kalshi for tomorrow\'s high market - try refreshing shortly.</div>'
+            if kalshi_tomorrow_high_error else '<div class="hint">Market not open yet.</div>'
+        ),
         "kalshi_tomorrow_low_ticker": kalshi_tomorrow_low["event_ticker"] if kalshi_tomorrow_low else "no open market",
-        "kalshi_tomorrow_low_rows": build_kalshi_rows(kalshi_tomorrow_low["brackets"], extremes["tomorrow_low_f"], "Estimated low") if kalshi_tomorrow_low else '<div class="hint">Market not open yet.</div>',
+        "kalshi_tomorrow_low_rows": build_kalshi_rows(kalshi_tomorrow_low["brackets"], extremes["tomorrow_low_f"], "Estimated low") if kalshi_tomorrow_low else (
+            '<div class="hint">Temporarily unable to reach Kalshi for tomorrow\'s low market - try refreshing shortly.</div>'
+            if kalshi_tomorrow_low_error else '<div class="hint">Market not open yet.</div>'
+        ),
         "high_volume_total": f"{high_volume['total_contracts']:,.0f}" if high_volume else "—",
         "high_volume_dollars_est": f"≈${high_volume['total_dollars']:,.0f} est." if high_volume else "—",
         "high_volume_svg": build_volume_bars_svg(high_volume["hourly"], now.tzinfo) if high_volume else '<div class="hint">Volume unavailable.</div>',
