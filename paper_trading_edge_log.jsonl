@@ -1,0 +1,1 @@
+{"date": "2026-07-23", "side": "low", "lead_time_hint": "1hr", "evaluated_at": "2026-07-23T03:53:00-07:00", "hours_ahead": 1.72, "bucket_label": "57\u00b0 or below", "model_implied_probability": 0.1471, "market_implied_probability": 0.01, "edge": 0.1371, "min_edge_threshold": 0.15, "bet_placed": false}
