@@ -462,6 +462,30 @@
       to { opacity: 1; transform: translateY(0); }
     }
   }
+
+  /* Desktop layout: below this, .content stays the original single-column
+     phone-width card (max-width: 430px, defined above) - that's the only
+     layout this page had until now. Above it, widen the container and lay
+     small stat cards out two-up so they don't stretch into awkwardly wide
+     single-column cards; data-dense panels (weekly/monthly performance,
+     paper trading, both already width:100% tables/text internally) get
+     marked .wide to span both columns instead, since a single continuous
+     table reads better wide, not split. */
+  @media (min-width: 860px) {
+    .content {
+      max-width: 1080px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      align-items: start;
+    }
+    .place, .hero, .footer, .wide {
+      grid-column: 1 / -1;
+    }
+  }
+
+  @media (min-width: 1360px) {
+    .content { max-width: 1320px; }
+  }
 </style>
 
 <div class="scene" data-sky="{{sky_class}}">
@@ -667,18 +691,18 @@
       <div class="hint">Contract count matches Kalshi's own "Volume" figure. The dollar amount is our own estimate (contracts × that hour's average price) since Kalshi doesn't publish a dollar total directly.</div>
     </div>
 
-    <div class="glass">
+    <div class="glass wide">
       <div class="module-label">Weekly performance · high ({{weekly_days_with_data}} of {{weekly_days_requested}} days)</div>
       <div class="perf-scroll">{{weekly_high_table}}</div>
       <div class="hint">Trailing 7 days, most recent first. Predictions only appear once calibration_log.py has logged them (recent addition) - actual/Kalshi columns work back further.</div>
     </div>
 
-    <div class="glass">
+    <div class="glass wide">
       <div class="module-label">Weekly performance · low ({{weekly_days_with_data}} of {{weekly_days_requested}} days)</div>
       <div class="perf-scroll">{{weekly_low_table}}</div>
     </div>
 
-    <div class="glass">
+    <div class="glass wide">
       <div class="module-label">Monthly performance · {{monthly_label}}</div>
       {{monthly_low_sample_note}}
       <div class="module-label" style="margin-top: 4px;">High</div>
@@ -688,13 +712,13 @@
       <div class="hint">Bias/MAE use the same (predicted − actual) sign convention as the backtest above. Positive bias means the model's prediction ran warm/high or late; negative means it ran cool/low or early.</div>
     </div>
 
-    <div class="glass">
+    <div class="glass wide">
       <div class="module-label">Paper trading · trailing 7 days</div>
       {{weekly_paper_trading}}
       <div class="hint">Simulated only - no real orders placed. A bet is logged when the model's own (backtest-calibrated) probability disagrees with Kalshi's price by at least 15 points - independently at ~1hr and ~2hr before the predicted peak, so the two lead times can be compared rather than picking one upfront. Kept separate on purpose - see the two blocks below.</div>
     </div>
 
-    <div class="glass">
+    <div class="glass wide">
       <div class="module-label">Paper trading · {{monthly_label}}</div>
       {{monthly_paper_trading}}
     </div>
@@ -761,7 +785,7 @@
       <div class="hint">A separate, closer-to-home comparison point - not part of the KSEA model above, and not blended into it. Sea-Tac Airport runs warmer than Fremont in summer (further from Lake Union/marine moderation), so treat these as two different microclimates. Current conditions are real observations from KBFI (Boeing Field, nearest full ASOS station - still ~5-6mi from Fremont). The high/low is NWS's own HRRR-based forecast for Fremont's actual coordinates, not this tool's in-house trend/gradient-network model - no backtesting or paper trading behind these numbers yet.</div>
     </div>
 
-    <div>
+    <div class="wide">
       <div class="module-label">Verify the data</div>
       <div class="data-links">
         <a href="{{obs_json_url}}" target="_blank" rel="noopener">Raw station data (JSON)</a>
