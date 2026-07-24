@@ -155,6 +155,36 @@
     margin-bottom: 12px;
   }
 
+  /* Collapsible deeper sections (hourly volume charts, weekly/monthly
+     rollups) - closed by default via the native <details> element, no JS
+     needed. The primary glance view (place/hero/trend/sparkline/today's
+     estimated peak) stays as plain always-open .glass divs, untouched. */
+  summary.module-label {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 0;
+  }
+  summary.module-label::-webkit-details-marker { display: none; }
+  summary.module-label::before {
+    content: "▸";
+    display: inline-block;
+    font-size: 10px;
+    color: var(--text-faint);
+    transition: transform 0.15s ease;
+  }
+  details[open] > summary.module-label::before {
+    transform: rotate(90deg);
+  }
+  details[open] > summary.module-label {
+    margin-bottom: 12px;
+  }
+  details > summary.module-label {
+    outline: none;
+  }
+
   .estimate-row {
     display: flex;
     align-items: baseline;
@@ -614,8 +644,8 @@
       <div class="kalshi-ticker">{{kalshi_high_ticker}}</div>
     </div>
 
-    <div class="glass">
-      <div class="module-label">Kalshi · today's high market volume</div>
+    <details class="glass">
+      <summary class="module-label">Kalshi · today's high market volume</summary>
       <div class="estimate-row">
         <span class="estimate-value">{{high_volume_total}}</span>
         <span class="estimate-label">contracts traded, last 24h</span>
@@ -625,8 +655,8 @@
         <span class="range-values">{{high_volume_dollars_est}}</span>
       </div>
       {{high_volume_svg}}
-      <div class="hint">Contract count matches Kalshi's own "Volume" figure. The dollar amount is our own estimate (contracts × that hour's average price) since Kalshi doesn't publish a dollar total directly.</div>
-    </div>
+      <div class="hint">Contract count matches Kalshi's own "Volume" figure; the dollar amount is our own estimate (contracts × that hour's average price) since Kalshi doesn't publish a dollar total directly. Applies to all four volume charts on this page (today's/tomorrow's high/low).</div>
+    </details>
 
     <div class="glass">
       <div class="module-label">Kalshi · today's low market</div>
@@ -635,8 +665,8 @@
       <div class="kalshi-ticker">{{kalshi_low_ticker}}</div>
     </div>
 
-    <div class="glass">
-      <div class="module-label">Kalshi · today's low market volume</div>
+    <details class="glass">
+      <summary class="module-label">Kalshi · today's low market volume</summary>
       <div class="estimate-row">
         <span class="estimate-value">{{low_volume_total}}</span>
         <span class="estimate-label">contracts traded, last 24h</span>
@@ -646,8 +676,7 @@
         <span class="range-values">{{low_volume_dollars_est}}</span>
       </div>
       {{low_volume_svg}}
-      <div class="hint">Contract count matches Kalshi's own "Volume" figure. The dollar amount is our own estimate (contracts × that hour's average price) since Kalshi doesn't publish a dollar total directly.</div>
-    </div>
+    </details>
 
     <div class="glass">
       <div class="module-label">Kalshi · tomorrow's high market</div>
@@ -656,8 +685,8 @@
       <div class="kalshi-ticker">{{kalshi_tomorrow_high_ticker}}</div>
     </div>
 
-    <div class="glass">
-      <div class="module-label">Kalshi · tomorrow's high market volume</div>
+    <details class="glass">
+      <summary class="module-label">Kalshi · tomorrow's high market volume</summary>
       <div class="estimate-row">
         <span class="estimate-value">{{tomorrow_high_volume_total}}</span>
         <span class="estimate-label">contracts traded, last 24h</span>
@@ -667,8 +696,7 @@
         <span class="range-values">{{tomorrow_high_volume_dollars_est}}</span>
       </div>
       {{tomorrow_high_volume_svg}}
-      <div class="hint">Contract count matches Kalshi's own "Volume" figure. The dollar amount is our own estimate (contracts × that hour's average price) since Kalshi doesn't publish a dollar total directly.</div>
-    </div>
+    </details>
 
     <div class="glass">
       <div class="module-label">Kalshi · tomorrow's low market</div>
@@ -677,8 +705,8 @@
       <div class="kalshi-ticker">{{kalshi_tomorrow_low_ticker}}</div>
     </div>
 
-    <div class="glass">
-      <div class="module-label">Kalshi · tomorrow's low market volume</div>
+    <details class="glass">
+      <summary class="module-label">Kalshi · tomorrow's low market volume</summary>
       <div class="estimate-row">
         <span class="estimate-value">{{tomorrow_low_volume_total}}</span>
         <span class="estimate-label">contracts traded, last 24h</span>
@@ -688,40 +716,39 @@
         <span class="range-values">{{tomorrow_low_volume_dollars_est}}</span>
       </div>
       {{tomorrow_low_volume_svg}}
-      <div class="hint">Contract count matches Kalshi's own "Volume" figure. The dollar amount is our own estimate (contracts × that hour's average price) since Kalshi doesn't publish a dollar total directly.</div>
-    </div>
+    </details>
 
-    <div class="glass wide">
-      <div class="module-label">Weekly performance · high ({{weekly_days_with_data}} of {{weekly_days_requested}} days)</div>
+    <details class="glass wide">
+      <summary class="module-label">Weekly performance · high ({{weekly_days_with_data}} of {{weekly_days_requested}} days)</summary>
       <div class="perf-scroll">{{weekly_high_table}}</div>
       <div class="hint">Trailing 7 days, most recent first. Predictions only appear once calibration_log.py has logged them (recent addition) - actual/Kalshi columns work back further.</div>
-    </div>
+    </details>
 
-    <div class="glass wide">
-      <div class="module-label">Weekly performance · low ({{weekly_days_with_data}} of {{weekly_days_requested}} days)</div>
+    <details class="glass wide">
+      <summary class="module-label">Weekly performance · low ({{weekly_days_with_data}} of {{weekly_days_requested}} days)</summary>
       <div class="perf-scroll">{{weekly_low_table}}</div>
-    </div>
+    </details>
 
-    <div class="glass wide">
-      <div class="module-label">Monthly performance · {{monthly_label}}</div>
+    <details class="glass wide">
+      <summary class="module-label">Monthly performance · {{monthly_label}}</summary>
       {{monthly_low_sample_note}}
       <div class="module-label" style="margin-top: 4px;">High</div>
       {{monthly_high_stats}}
       <div class="module-label" style="margin-top: 16px;">Low</div>
       {{monthly_low_stats}}
       <div class="hint">Bias/MAE use the same (predicted − actual) sign convention as the backtest above. Positive bias means the model's prediction ran warm/high or late; negative means it ran cool/low or early.</div>
-    </div>
+    </details>
 
-    <div class="glass wide">
-      <div class="module-label">Paper trading · trailing 7 days</div>
+    <details class="glass wide">
+      <summary class="module-label">Paper trading · trailing 7 days</summary>
       {{weekly_paper_trading}}
       <div class="hint">Simulated only - no real orders placed. A bet is logged when the model's own (backtest-calibrated) probability disagrees with Kalshi's price by at least 15 points - independently at ~1hr and ~2hr before the predicted peak, so the two lead times can be compared rather than picking one upfront. Kept separate on purpose - see the two blocks below.</div>
-    </div>
+    </details>
 
-    <div class="glass wide">
-      <div class="module-label">Paper trading · {{monthly_label}}</div>
+    <details class="glass wide">
+      <summary class="module-label">Paper trading · {{monthly_label}}</summary>
       {{monthly_paper_trading}}
-    </div>
+    </details>
 
     <div class="glass">
       <div class="module-label">Conditions</div>
