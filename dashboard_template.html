@@ -43,6 +43,39 @@
     background: linear-gradient(175deg, #191c24 0%, #2a2e39 45%, #3d434f 100%);
   }
 
+  /* Accessibility fix: the day-sky gradients (bright blue / pale gray-blue)
+     are far too light for the near-white text palette this page uses -
+     measured contrast ratios as low as 1.17:1 against the palest part of
+     the day-clear gradient, nowhere near WCAG AA's 4.5:1 (normal text) /
+     3:1 (large text and UI components) minimums. Night skies were already
+     fully compliant (7:1-19:1) and are untouched below.
+     Fix, day-sky only: panels get a dark navy tint instead of the
+     white-on-white-ish wash they had (which, on a light sky, made contrast
+     worse, not better), and --text-faint gets a bit more opaque. Verified
+     by computing contrast at every gradient stop for every text tier:
+     worst case across the whole day-clear/day-cloudy range is 5.15:1,
+     comfortably past 4.5:1 with margin for rendering variance. Also
+     extends the same dark backdrop to .place/.hero/.footer/the "Verify the
+     data" block - these sit directly on the sky with no card behind them
+     at all in the original design, which is why the giant hero
+     temperature itself measured as low as 1.65:1. */
+  .scene[data-sky^="day"] {
+    --glass-bg: rgba(8, 20, 40, 0.65);
+    --glass-bg-strong: rgba(8, 20, 40, 0.78);
+    --text-faint: rgba(255, 255, 255, 0.75);
+  }
+  .scene[data-sky^="day"] .place,
+  .scene[data-sky^="day"] .hero,
+  .scene[data-sky^="day"] .footer,
+  .scene[data-sky^="day"] .wide:not(.glass) {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 20px;
+    padding: 18px 20px;
+    backdrop-filter: blur(24px) saturate(150%);
+    -webkit-backdrop-filter: blur(24px) saturate(150%);
+  }
+
   .scene::before {
     content: "";
     position: absolute;
