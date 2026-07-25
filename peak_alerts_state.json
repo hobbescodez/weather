@@ -134,5 +134,25 @@
       "confidence_at_send": null,
       "skipped_missed_window": false
     }
+  },
+  "2026-07-26": {
+    "low": {
+      "predicted_peak_time_at_lock": "2026-07-26T05:40:00-07:00",
+      "window_start": "2026-07-26T04:40:00-07:00",
+      "hard_cutoff": "2026-07-26T05:20:00-07:00",
+      "checkpoints": [
+        "2026-07-26T04:40:00-07:00",
+        "2026-07-26T04:50:00-07:00",
+        "2026-07-26T05:00:00-07:00",
+        "2026-07-26T05:10:00-07:00",
+        "2026-07-26T05:20:00-07:00"
+      ],
+      "locked_at": "2026-07-25T06:05:00-07:00",
+      "sent": false,
+      "sent_at": null,
+      "message": null,
+      "confidence_at_send": null,
+      "skipped_missed_window": false
+    }
   }
 }
