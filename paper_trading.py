@@ -82,6 +82,24 @@ here and pre-filtering on a second guessed cutoff would just hide the
 same problem one level down. `python3 paper_trading.py edge-stats`
 summarizes that log's distribution.
 
+Second strategy, LOW MARKET ONLY: place_unconditional_low_bet() bets
+every single day on whichever bracket the model's own point estimate
+falls into, with no edge threshold at all - the opposite decision rule
+from place_paper_trade's MIN_EDGE gate. It answers a different
+question than the edge-gated bets do: does simply following the
+model's own call every day beat (or lose to) only betting when a real
+mispricing is detected? Every bet - both strategies - carries a
+trigger_type field ("edge" or "unconditional") precisely so the two
+populations are never pooled into one win-rate/P&L number (same
+never-combine principle as LEAD_TIME_HINTS). High-side markets don't
+get an unconditional mode - only low, per the spec this was built to;
+nothing here stops adding one for high later, but nothing calls it
+today. It fires once per day, timed off the SAME ~1hr-before-predicted-
+low checkpoint window peak_alerts.py already locks in for the low
+side's text alert and the existing edge-gated "1hr" bet - no separate
+scheduling exists for it, and it's just as idempotent (day_pending's
+"low_unconditional" key, checked before placing).
+
 Real-money guardrails (documented, NOT implemented - this module never
 places a real order):
   - hard daily cap on number of real bets and total dollar exposure
@@ -97,6 +115,7 @@ CLI:
     python3 paper_trading.py place high 2hr
     python3 paper_trading.py place low
     python3 paper_trading.py place low 2hr
+    python3 paper_trading.py place-unconditional-low  # low only, no edge gate
     python3 paper_trading.py lock-2hr             # lock in today's 2hr targets
     python3 paper_trading.py status
     python3 paper_trading.py edge-stats           # distribution of every edge found, bet or not
@@ -327,6 +346,7 @@ def place_paper_trade(station_id, side, lead_time_hint="1hr"):
         return None  # no meaningful edge today - don't force a bet
 
     bet = {
+        "trigger_type": "edge",
         "lead_time_hint": lead_time_hint,
         "simulated_bucket_chosen": best["bracket"]["label"],
         "simulated_bucket_floor": best["bracket"]["floor_strike"],
@@ -355,6 +375,114 @@ def place_paper_trade(station_id, side, lead_time_hint="1hr"):
     return bet
 
 
+def place_unconditional_low_bet(station_id=STATION):
+    """
+    The low market's second, non-edge-gated strategy (see module
+    docstring): once per day, unconditionally bets $STAKE on whichever
+    Kalshi bracket the model's own point estimate (estimated_low_f)
+    falls into at call time - regardless of whether that bracket's
+    price disagrees with the model at all. No MIN_EDGE check here; that
+    is the entire point of this strategy.
+
+    Stored under pending[date_str]["low_unconditional"] - a sibling key
+    to pending[date_str]["low"], never nested inside it, so it can
+    never collide with the edge-gated bets' own lead_time_hint keys
+    there.
+
+    Returns the bet dict, or None if already placed today, today's low
+    market can't be found, or the specific bracket the point estimate
+    falls into has no live price to simulate an entry against (same
+    "can't bet what isn't priced" rule place_paper_trade already
+    follows - unconditional means "no edge required," not "bet blind
+    against an unknown price").
+    """
+    extremes = estimate_daily_extremes(station_id)
+    now = extremes["as_of"]
+    date_str = now.date().isoformat()
+
+    pending = _load_pending()
+    day_pending = pending.get(date_str, {})
+    if "low_unconditional" in day_pending:
+        return None
+
+    point = extremes["estimated_low_f"]
+    peak_time = extremes["estimated_low_time"]
+
+    hours_ahead = max((peak_time - now).total_seconds() / 3600, 0.25)
+    est = estimate_temp(station_id, hours_ahead=hours_ahead)
+    lo, hi = est["estimated_range_f"]
+    half_band = (hi - lo) / 2
+
+    coverage = _empirical_band_coverage(station_id)
+    sigma = _calibrated_sigma(half_band, coverage)
+
+    market = get_market_for_date(LOW_SERIES, now.date())
+    if market is None:
+        return None
+
+    chosen = next((b for b in market["brackets"] if bracket_contains(b, point)), None)
+    if chosen is None or chosen["last_price"] is None:
+        return None  # nothing to simulate an entry price against
+
+    model_p = _bucket_probability(point, sigma, chosen["floor_strike"], chosen["cap_strike"])
+    market_p = chosen["last_price"]
+
+    bet = {
+        "trigger_type": "unconditional",
+        "lead_time_hint": "1hr",
+        "simulated_bucket_chosen": chosen["label"],
+        "simulated_bucket_floor": chosen["floor_strike"],
+        "simulated_bucket_cap": chosen["cap_strike"],
+        "simulated_entry_price": market_p,
+        "simulated_stake": STAKE,
+        "model_implied_probability": round(model_p, 4),
+        "market_implied_probability": round(market_p, 4),
+        "edge_at_entry": round(model_p - market_p, 4),
+        "estimated_range_low_f": lo,
+        "estimated_range_high_f": hi,
+        "hours_ahead_at_entry": round(hours_ahead, 2),
+        "placed_at": now.isoformat(),
+        "all_buckets": [
+            {"label": b["label"], "floor_strike": b["floor_strike"], "cap_strike": b["cap_strike"]}
+            for b in market["brackets"]
+        ],
+    }
+    day_pending["low_unconditional"] = bet
+    pending[date_str] = day_pending
+    _save_pending(pending)
+    return bet
+
+
+def _resolve_bet(bet, actual_temp):
+    """Shared per-bet resolution math - which bracket actual_temp
+    landed in, whether that matches the bet's chosen bracket, and the
+    resulting simulated payout - used identically by resolve_paper_
+    trade (both lead times) and resolve_unconditional_low_bet, since
+    the payout arithmetic doesn't care which strategy chose the
+    bracket, only what was bet and what happened."""
+    outcome_bucket = None
+    for b in bet.get("all_buckets", []):
+        if bracket_contains(b, actual_temp):
+            outcome_bucket = b["label"]
+            break
+
+    hit = outcome_bucket == bet["simulated_bucket_chosen"]
+    stake = bet["simulated_stake"]
+    price = bet["simulated_entry_price"]
+    payout = stake * (1 - price) / price if hit and price > 0 else (0.0 if price <= 0 else -stake)
+
+    r = {k: v for k, v in bet.items() if k != "all_buckets"}
+    r["outcome_bucket"] = outcome_bucket
+    r["hit"] = hit
+    r["simulated_payout"] = round(payout, 4)
+    range_low = bet.get("estimated_range_low_f")
+    range_high = bet.get("estimated_range_high_f")
+    r["within_uncertainty_band"] = (
+        range_low <= actual_temp <= range_high if range_low is not None and range_high is not None else None
+    )
+    return r
+
+
 def resolve_paper_trade(date_str, side, actual_temp):
     """
     Called from daily_performance.py's finalize_day() once the actual
@@ -371,33 +499,26 @@ def resolve_paper_trade(date_str, side, actual_temp):
     resolved = {}
     for lead_time_hint in LEAD_TIME_HINTS:
         bet = day_bets.get(lead_time_hint)
-        if bet is None:
-            resolved[lead_time_hint] = None
-            continue
-
-        outcome_bucket = None
-        for b in bet.get("all_buckets", []):
-            if bracket_contains(b, actual_temp):
-                outcome_bucket = b["label"]
-                break
-
-        hit = outcome_bucket == bet["simulated_bucket_chosen"]
-        stake = bet["simulated_stake"]
-        price = bet["simulated_entry_price"]
-        payout = stake * (1 - price) / price if hit and price > 0 else (0.0 if price <= 0 else -stake)
-
-        r = {k: v for k, v in bet.items() if k != "all_buckets"}
-        r["outcome_bucket"] = outcome_bucket
-        r["hit"] = hit
-        r["simulated_payout"] = round(payout, 4)
-        range_low = bet.get("estimated_range_low_f")
-        range_high = bet.get("estimated_range_high_f")
-        r["within_uncertainty_band"] = (
-            range_low <= actual_temp <= range_high if range_low is not None and range_high is not None else None
-        )
-        resolved[lead_time_hint] = r
+        resolved[lead_time_hint] = _resolve_bet(bet, actual_temp) if bet is not None else None
 
     return resolved
+
+
+def resolve_unconditional_low_bet(date_str, actual_temp):
+    """
+    Resolves the unconditional low bet (see place_unconditional_low_bet)
+    the same way resolve_paper_trade resolves everything else - against
+    whatever actual_temp the caller hands in (daily_performance.py's
+    CLI-preferred value, stream as fallback - see its module docstring).
+    Pure, like resolve_paper_trade, so daily_performance.reconcile_
+    stream_fallback_actuals can re-call this with a corrected
+    actual_temp exactly the same way it already does for the edge-gated
+    bets - no special-casing needed there. Returns the resolved bet
+    dict, or None if no unconditional bet was placed that day.
+    """
+    pending = _load_pending()
+    bet = pending.get(date_str, {}).get("low_unconditional")
+    return _resolve_bet(bet, actual_temp) if bet is not None else None
 
 
 def _load_2hr_schedule():
@@ -473,6 +594,9 @@ if __name__ == "__main__":
         lead_time_hint = sys.argv[3] if len(sys.argv) > 3 else "1hr"
         bet = place_paper_trade(STATION, side, lead_time_hint)
         print(json.dumps(bet, indent=2) if bet else json.dumps({"placed": False}))
+    elif cmd == "place-unconditional-low":
+        bet = place_unconditional_low_bet(STATION)
+        print(json.dumps(bet, indent=2) if bet else json.dumps({"placed": False}))
     elif cmd == "lock-2hr":
         result = get_or_lock_2hr_targets(STATION)
         print(json.dumps(result, indent=2))
@@ -485,4 +609,4 @@ if __name__ == "__main__":
     elif cmd == "edge-stats":
         print(json.dumps(edge_log_stats(), indent=2))
     else:
-        print(f"Unknown command: {cmd}. Use place <high|low> [1hr|2hr] | lock-2hr | status | edge-stats.")
+        print(f"Unknown command: {cmd}. Use place <high|low> [1hr|2hr] | place-unconditional-low | lock-2hr | status | edge-stats.")

@@ -327,28 +327,37 @@ def build_monthly_stats_rows(stats):
 
 
 LEAD_TIME_LABELS = {"1hr": "1hr before peak", "2hr": "2hr before peak"}
+LOW_STRATEGY_KEYS = ("edge", "unconditional")
+LOW_STRATEGY_LABELS = {
+    "edge": "Low - edge-triggered (1hr)",
+    "unconditional": "Low - unconditional (1hr)",
+}
 
 
-def build_paper_trading_rows(stats_by_lead_time):
+def build_paper_trading_rows(stats_by_key, keys=LEAD_TIME_HINTS, labels=LEAD_TIME_LABELS):
     """
-    stats_by_lead_time: {"1hr": {...}, "2hr": {...}} from daily_performance.
-    _paper_trading_stats. Rendered as two independent blocks - NEVER
-    averaged/combined into one set of numbers, since the whole point of
-    running both lead times in parallel is comparing them against each
-    other (see paper_trading.py's module docstring); collapsing them here
-    would quietly erase the comparison the feature exists to make. A
-    block with fewer than LOW_SAMPLE_THRESHOLD bets shows "insufficient
-    data" instead of a percentage/comparison that thin would misrepresent
-    as meaningful - same guard monthly_rollup already uses for low_sample.
+    stats_by_key: a dict of {key: {...}} shaped like daily_performance.
+    _aggregate_paper_trading_bets's return, for each of `keys`. Rendered
+    as independent blocks - NEVER averaged/combined into one set of
+    numbers, since the whole point of running multiple populations in
+    parallel is comparing them against each other (see paper_trading.py's
+    module docstring); collapsing them here would quietly erase the
+    comparison the feature exists to make. Used both for the existing
+    lead-time split (keys=LEAD_TIME_HINTS, the default) and for the low
+    market's edge-vs-unconditional strategy split (keys=LOW_STRATEGY_KEYS)
+    - same rendering rules either way. A block with fewer than
+    LOW_SAMPLE_THRESHOLD bets shows "insufficient data" instead of a
+    percentage/comparison that thin would misrepresent as meaningful -
+    same guard monthly_rollup already uses for low_sample.
     """
     def row(label, value):
         return f'<div class="range-row"><span class="range-label">{label}</span><span class="range-values">{value}</span></div>'
 
     blocks = []
-    for i, lt in enumerate(LEAD_TIME_HINTS):
-        stats = stats_by_lead_time[lt]
+    for i, key in enumerate(keys):
+        stats = stats_by_key[key]
         label_style = "" if i == 0 else " style=\"margin-top: 16px;\""
-        header = f'<div class="module-label"{label_style}>{LEAD_TIME_LABELS[lt]}</div>'
+        header = f'<div class="module-label"{label_style}>{labels[key]}</div>'
 
         if stats["n_bets"] == 0:
             blocks.append(header + '<div class="hint">No simulated bets placed yet in this window.</div>')
@@ -809,6 +818,12 @@ def main():
         "monthly_low_stats": build_monthly_stats_rows(monthly_perf["low"]),
         "weekly_paper_trading": build_paper_trading_rows(weekly_perf["paper_trading"]),
         "monthly_paper_trading": build_paper_trading_rows(monthly_perf["paper_trading"]),
+        "weekly_low_strategy": build_paper_trading_rows(
+            weekly_perf["low_strategy_comparison"], LOW_STRATEGY_KEYS, LOW_STRATEGY_LABELS
+        ),
+        "monthly_low_strategy": build_paper_trading_rows(
+            monthly_perf["low_strategy_comparison"], LOW_STRATEGY_KEYS, LOW_STRATEGY_LABELS
+        ),
         "fremont_current_temp": f"{fremont_current_temp:.1f}" if fremont_current_temp is not None else "—",
         "fremont_condition_text": fremont_condition_text,
         "fremont_obs_time": _fmt_time(fremont_obs_time) if fremont_obs_time is not None else "—",

@@ -776,11 +776,16 @@
       <summary class="module-label">Paper trading · trailing 7 days</summary>
       {{weekly_paper_trading}}
       <div class="hint">Simulated only - no real orders placed. A bet is logged when the model's own (backtest-calibrated) probability disagrees with Kalshi's price by at least 15 points - independently at ~1hr and ~2hr before the predicted peak, so the two lead times can be compared rather than picking one upfront. Kept separate on purpose - see the two blocks below.</div>
+      <div class="module-label" style="margin-top: 16px;">Low market: always-bet-the-model vs. edge-gated</div>
+      {{weekly_low_strategy}}
+      <div class="hint">Low market only. "Edge-triggered" is the same 15-point-disagreement bet already counted above under "1hr before peak" (isolated here to just the low side, since the block above pools high and low together); "unconditional" instead bets every single day on whichever bracket the model's own point estimate falls into, no disagreement required. Comparing the two answers whether just following the model daily beats only betting when a real mispricing shows up. High doesn't get an unconditional mode - this comparison only applies to low.</div>
     </details>
 
     <details class="glass wide">
       <summary class="module-label">Paper trading · {{monthly_label}}</summary>
       {{monthly_paper_trading}}
+      <div class="module-label" style="margin-top: 16px;">Low market: always-bet-the-model vs. edge-gated</div>
+      {{monthly_low_strategy}}
     </details>
 
     <div class="glass">

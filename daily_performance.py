@@ -50,7 +50,7 @@ from kalshi import (
     bracket_contains,
 )
 from nws_climate import fetch_recent_cli_finals
-from paper_trading import resolve_paper_trade, LEAD_TIME_HINTS
+from paper_trading import resolve_paper_trade, resolve_unconditional_low_bet, LEAD_TIME_HINTS
 import requests
 
 LOG_PATH = os.path.join(os.path.dirname(__file__), "daily_performance.jsonl")
@@ -321,8 +321,20 @@ def _finalize_side(station_id, day, side, actuals, prediction, series_ticker, tz
         # means no bet was placed that day/side/lead-time (e.g. no edge
         # cleared MIN_EDGE at that particular moment); otherwise
         # resolve_paper_trade's output for that lead time merged in
-        # directly.
+        # directly. Every entry here is trigger_type "edge" - see
+        # paper_trade_unconditional below for the low market's separate,
+        # non-edge-gated strategy.
         "paper_trades": {lt: None for lt in LEAD_TIME_HINTS},
+        # Low market only (see paper_trading.py's module docstring on why
+        # high never gets this): the unconditional, always-bet-the-model's-
+        # point-estimate strategy, fired at the same ~1hr-before-low moment
+        # as "1hr" above but never pooled with it - kept as its own field,
+        # with its own trigger_type, precisely so the two decision rules
+        # can be compared rather than blended into one win-rate number.
+        # Stays None for the high side, and for low on any day the bet
+        # wasn't placed (market unavailable, or the chosen bracket had no
+        # live price).
+        "paper_trade_unconditional": None,
     }
 
     resolved_bets = resolve_paper_trade(day.isoformat(), side, actual_temp)
@@ -330,6 +342,7 @@ def _finalize_side(station_id, day, side, actuals, prediction, series_ticker, tz
         if resolved_bet is None:
             continue
         record["paper_trades"][lead_time_hint] = {
+            "trigger_type": resolved_bet.get("trigger_type", "edge"),
             "simulated_bucket_chosen": resolved_bet["simulated_bucket_chosen"],
             "simulated_entry_price": resolved_bet["simulated_entry_price"],
             "simulated_stake": resolved_bet["simulated_stake"],
@@ -341,6 +354,23 @@ def _finalize_side(station_id, day, side, actuals, prediction, series_ticker, tz
             "simulated_payout": resolved_bet["simulated_payout"],
             "within_uncertainty_band": resolved_bet.get("within_uncertainty_band"),
         }
+
+    if side == "low":
+        resolved_unconditional = resolve_unconditional_low_bet(day.isoformat(), actual_temp)
+        if resolved_unconditional is not None:
+            record["paper_trade_unconditional"] = {
+                "trigger_type": resolved_unconditional["trigger_type"],
+                "simulated_bucket_chosen": resolved_unconditional["simulated_bucket_chosen"],
+                "simulated_entry_price": resolved_unconditional["simulated_entry_price"],
+                "simulated_stake": resolved_unconditional["simulated_stake"],
+                "model_implied_probability": resolved_unconditional["model_implied_probability"],
+                "market_implied_probability": resolved_unconditional["market_implied_probability"],
+                "edge_at_entry": resolved_unconditional.get("edge_at_entry"),
+                "outcome_bucket": resolved_unconditional["outcome_bucket"],
+                "hit": resolved_unconditional["hit"],
+                "simulated_payout": resolved_unconditional["simulated_payout"],
+                "within_uncertainty_band": resolved_unconditional.get("within_uncertainty_band"),
+            }
 
     try:
         event_ticker = get_event_ticker_for_any_date(series_ticker, day)
@@ -542,6 +572,7 @@ def weekly_table(station_id, days=7):
         "days_with_data": len(finalized_rows),
         "rows": rows,
         "paper_trading": _paper_trading_stats(finalized_rows),
+        "low_strategy_comparison": _low_strategy_stats(finalized_rows),
     }
 
 
@@ -568,40 +599,40 @@ def _paper_trading_stats(records):
     return {lt: _paper_trading_stats_for_lead_time(records, lt) for lt in LEAD_TIME_HINTS}
 
 
-def _paper_trading_stats_for_lead_time(records, lead_time_hint):
+def _bet_row(r, side, trade):
+    return {
+        "date": r["date"], "side": side,
+        "payout": trade["simulated_payout"],
+        "hit": trade["hit"],
+        "model_p": trade["model_implied_probability"],
+        "market_p": trade["market_implied_probability"],
+        "edge_at_entry": trade.get("edge_at_entry"),
+        "within_band": trade.get("within_uncertainty_band"),
+    }
+
+
+def _aggregate_paper_trading_bets(bets):
     """
     total_pnl/win_rate answer "would this have made money"; avg_edge_at_
-    entry is the raw mispricing the bet was based on; pct_within_
-    uncertainty_band checks whether the model's stated confidence band,
-    specifically at THIS lead time, was honestly calibrated (a band
-    evaluated 1hr before peak isn't necessarily as well-calibrated as one
-    evaluated 2hr before - that's exactly the kind of thing this
-    comparison exists to surface); model_vs_market answers the actual
-    question the wider feature exists to test - on the days the model's
-    and Kalshi's probabilities disagreed most, which one ended up closer
-    to the real outcome? low_sample flags fewer than LOW_SAMPLE_THRESHOLD
-    bets, same guard as monthly_rollup's own low_sample - the caller
-    should show "insufficient data" rather than a percentage this thin.
-    """
-    bets = []
-    for r in records:
-        for side in ("high", "low"):
-            rec = r.get(side)
-            if rec is None:
-                continue
-            trade = (rec.get("paper_trades") or {}).get(lead_time_hint)
-            if trade is None or trade.get("simulated_payout") is None:
-                continue
-            bets.append({
-                "date": r["date"], "side": side,
-                "payout": trade["simulated_payout"],
-                "hit": trade["hit"],
-                "model_p": trade["model_implied_probability"],
-                "market_p": trade["market_implied_probability"],
-                "edge_at_entry": trade.get("edge_at_entry"),
-                "within_band": trade.get("within_uncertainty_band"),
-            })
+    entry is the raw mispricing (informational for the unconditional
+    strategy, which doesn't gate on it - it's still worth knowing how
+    big a mispricing existed on the days it bet blind); pct_within_
+    uncertainty_band checks whether the model's stated confidence band
+    was honestly calibrated for this population of bets; model_vs_market
+    answers the actual question the wider feature exists to test - on
+    the days the model's and Kalshi's probabilities disagreed most,
+    which one ended up closer to the real outcome? low_sample flags
+    fewer than LOW_SAMPLE_THRESHOLD bets, same guard as monthly_
+    rollup's own low_sample - the caller should show "insufficient
+    data" rather than a percentage this thin.
 
+    Shared by every population of bets this module compares
+    (_paper_trading_stats_for_lead_time's "1hr"/"2hr" split, and
+    _low_strategy_stats's "edge"/"unconditional" split) - the
+    aggregation math itself doesn't care what distinguishes one
+    population from another, only which bets are IN it, so callers
+    just hand in a pre-filtered bet list.
+    """
     if not bets:
         return {
             "n_bets": 0, "total_pnl": None, "win_rate": None,
@@ -641,6 +672,55 @@ def _paper_trading_stats_for_lead_time(records, lead_time_hint):
             "market_closer_count": market_closer,
         },
         "low_sample": len(bets) < LOW_SAMPLE_THRESHOLD,
+    }
+
+
+def _paper_trading_stats_for_lead_time(records, lead_time_hint):
+    bets = []
+    for r in records:
+        for side in ("high", "low"):
+            rec = r.get(side)
+            if rec is None:
+                continue
+            trade = (rec.get("paper_trades") or {}).get(lead_time_hint)
+            if trade is None or trade.get("simulated_payout") is None:
+                continue
+            bets.append(_bet_row(r, side, trade))
+    return _aggregate_paper_trading_bets(bets)
+
+
+def _low_strategy_stats(records):
+    """
+    Compares the low market's two independent bet-selection strategies
+    at the SAME ~1hr-before-low moment, so only the decision rule
+    differs, not the timing: "edge" re-extracts just the low side's own
+    edge-gated "1hr" bets (already counted, pooled with high, inside
+    _paper_trading_stats_for_lead_time("1hr") - this isolates low alone
+    so the comparison below is fair); "unconditional" is the
+    always-bet-the-model's-point-estimate strategy (see
+    paper_trading.py's place_unconditional_low_bet). Never pools the
+    two - the whole point is comparing them, same never-combine
+    principle as LEAD_TIME_HINTS. High has no unconditional strategy,
+    so there's nothing analogous to build for it.
+    """
+    edge_bets = []
+    unconditional_bets = []
+    for r in records:
+        low = r.get("low")
+        if low is None:
+            continue
+
+        edge_trade = (low.get("paper_trades") or {}).get("1hr")
+        if edge_trade is not None and edge_trade.get("simulated_payout") is not None:
+            edge_bets.append(_bet_row(r, "low", edge_trade))
+
+        uncond_trade = low.get("paper_trade_unconditional")
+        if uncond_trade is not None and uncond_trade.get("simulated_payout") is not None:
+            unconditional_bets.append(_bet_row(r, "low", uncond_trade))
+
+    return {
+        "edge": _aggregate_paper_trading_bets(edge_bets),
+        "unconditional": _aggregate_paper_trading_bets(unconditional_bets),
     }
 
 
@@ -687,6 +767,7 @@ def monthly_rollup(station_id, year, month):
         "high": _side_month_stats(records, "high"),
         "low": _side_month_stats(records, "low"),
         "paper_trading": _paper_trading_stats(records),
+        "low_strategy_comparison": _low_strategy_stats(records),
     }
 
 
