@@ -29,7 +29,13 @@ from weather_estimator import (
 )
 from kalshi import HIGH_SERIES, LOW_SERIES, get_market_for_date, get_event_hourly_volume, bracket_contains
 from calibration_log import record_snapshot, next_day_confidence_pct, MIN_NEXT_DAY_SAMPLES
-from daily_performance import finalize_pending_days, weekly_table, monthly_rollup, LOW_SAMPLE_THRESHOLD
+from daily_performance import (
+    finalize_pending_days,
+    reconcile_stream_fallback_actuals,
+    weekly_table,
+    monthly_rollup,
+    LOW_SAMPLE_THRESHOLD,
+)
 from peak_alerts import get_or_lock_daily_targets
 from paper_trading import get_or_lock_2hr_targets, LEAD_TIME_HINTS
 
@@ -496,6 +502,11 @@ def main():
         finalize_pending_days(STATION, lookback_days=7)
     except Exception as e:
         print(f"daily_performance: finalize_pending_days failed: {e}")
+
+    try:
+        reconcile_stream_fallback_actuals(STATION, lookback_days=5)
+    except Exception as e:
+        print(f"daily_performance: reconcile_stream_fallback_actuals failed: {e}")
 
     try:
         lock_result = get_or_lock_daily_targets(STATION)

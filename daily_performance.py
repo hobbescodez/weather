@@ -18,6 +18,18 @@ means the model's predicted temp ran warm/high vs. what actually
 happened; positive peak_time_error_minutes means the model predicted the
 peak later than it actually occurred.
 
+"Actual" source: actual_peak_temp prefers NWS's official CLI climate
+report (nws_climate.py) - the same source Kalshi itself settles
+against - falling back to the raw observation stream only when CLI
+isn't retained/published yet for that date. actual_peak_temp_source
+("cli" or "stream") tags which one won, and
+actual_peak_temp_stream_f/actual_peak_temp_cli_f keep BOTH values
+around regardless of which was picked, so accuracy stats never
+silently mix methodologies and a stream-fallback day can be identified
+and later upgraded (see reconcile_stream_fallback_actuals below) once
+CLI becomes available. This also drives what paper_trading.py's bets
+get resolved against, for the same reason.
+
 Run this file directly to finalize any completed days not yet in the
 log:
     python3 daily_performance.py
@@ -25,7 +37,7 @@ log:
 
 import json
 import os
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 from weather_estimator import get_observation_history
 from calibration_log import get_last_prediction
@@ -37,6 +49,7 @@ from kalshi import (
     get_market_brackets,
     bracket_contains,
 )
+from nws_climate import fetch_recent_cli_finals
 from paper_trading import resolve_paper_trade, LEAD_TIME_HINTS
 import requests
 
@@ -226,14 +239,28 @@ def _kalshi_day_stats(series_ticker, event_ticker, day_start, day_end, actual_pe
     return peak_volume, implied_at_actual, implied_at_predicted
 
 
-def _finalize_side(station_id, day, side, actuals, prediction, series_ticker, tzinfo):
+def _finalize_side(station_id, day, side, actuals, prediction, series_ticker, tzinfo, cli):
     """side: 'high' or 'low'. Builds one side's full record - temp/time
     errors always computed from real data; Kalshi fields are best-effort
     (None if that day's event can't be found or the API call fails,
-    rather than blocking the whole finalization)."""
-    actual_temp = actuals[f"{side}_temp"]
+    rather than blocking the whole finalization).
+
+    cli: that day's fetch_recent_cli_finals() entry, or None if CLI
+    hasn't got a final report for this date retained. actual_time
+    always comes from the observation stream regardless of temp
+    source - CLI never publishes a time-of-day for its max/min (see
+    nws_climate.py) - only the temperature VALUE prefers CLI."""
+    stream_temp = actuals[f"{side}_temp"]
     actual_time = actuals[f"{side}_time"]
     df = actuals["df"]
+
+    cli_temp = cli.get(f"{side}_f") if cli else None
+    if cli_temp is not None:
+        actual_temp = cli_temp
+        actual_temp_source = "cli"
+    else:
+        actual_temp = stream_temp
+        actual_temp_source = "stream"
 
     predicted_temp = prediction["temp_f"] if prediction else None
     predicted_time = datetime.fromisoformat(prediction["time"]) if prediction else None
@@ -262,6 +289,9 @@ def _finalize_side(station_id, day, side, actuals, prediction, series_ticker, tz
         "nws_forecast_error_f": nws_forecast_error_f,
         "actual_peak_time": actual_time.isoformat(),
         "actual_peak_temp": actual_temp,
+        "actual_peak_temp_source": actual_temp_source,
+        "actual_peak_temp_stream_f": stream_temp,
+        "actual_peak_temp_cli_f": cli_temp,
         "temp_1hr_before_actual_peak": temp_1hr_before_actual,
         "peak_time_error_minutes": peak_time_error_minutes,
         "peak_temp_error_f": peak_temp_error_f,
@@ -359,18 +389,28 @@ def finalize_day(station_id, day):
 
     sample = get_observation_history(station_id, limit=5)
     tzinfo = sample["time"].iloc[0].tzinfo
-    today_local = datetime.now(tzinfo).date()
+    now_local = datetime.now(tzinfo)
+    today_local = now_local.date()
     if day >= today_local:
         return None  # day isn't over yet
+    if day == today_local - timedelta(days=1) and now_local.time() < time(2, 0):
+        # NWS's FINAL CLI report for "yesterday" is typically published
+        # ~1:15-1:30am local (see nws_climate.py) - waiting until 2am
+        # before finalizing the very next day avoids an avoidable
+        # stream-fallback in the narrow window right after midnight when
+        # it just hasn't landed yet. Days further back are unaffected -
+        # CLI would already be out for them one way or another by now.
+        return None
 
     actuals_high = _full_day_actuals(station_id, day)
     if actuals_high is None:
         return None  # no observation data at all for that date - can't finalize
 
     prediction = get_last_prediction(date_str)
+    cli = fetch_recent_cli_finals().get(day)
 
-    high_record = _finalize_side(station_id, day, "high", actuals_high, prediction["high"], HIGH_SERIES, tzinfo)
-    low_record = _finalize_side(station_id, day, "low", actuals_high, prediction["low"], LOW_SERIES, tzinfo)
+    high_record = _finalize_side(station_id, day, "high", actuals_high, prediction["high"], HIGH_SERIES, tzinfo, cli)
+    low_record = _finalize_side(station_id, day, "low", actuals_high, prediction["low"], LOW_SERIES, tzinfo, cli)
 
     full_record = {
         "station": station_id.upper(),
@@ -402,6 +442,77 @@ def finalize_pending_days(station_id, lookback_days=7):
         if record is not None:
             finalized.append(record)
     return finalized
+
+
+def reconcile_stream_fallback_actuals(station_id, lookback_days=5):
+    """
+    Revisits recently-finalized days whose actual_peak_temp_source is
+    "stream" (or predates that field, from before this module tracked
+    it - same thing, since the stream was the only source that existed
+    then) and upgrades them to CLI if a final report has since become
+    available for that date. This is the one deliberate exception to
+    this log's otherwise-append-only pattern (see finalize_day): a
+    stream-fallback record is a best-effort placeholder, not a
+    permanent decision, because paper_trading.py's bet resolution
+    needs to reflect CLI - the real settlement source - once it
+    exists, even at the cost of re-writing an already-written row (see
+    paper_trading.py's module docstring on why accuracy there matters
+    more than immediacy). Re-finalizing a side rebuilds its whole
+    record, so this also naturally corrects the accuracy-tracking
+    fields (peak_temp_error_f etc.) for that side, not just the paper
+    trade.
+
+    Cheap to call on every refresh: once a day's actual has converged
+    to "cli" (or the retention window has passed with no final report
+    ever appearing - the two look identical from here, so both are
+    simply retried next time at near-zero cost), it's never touched
+    again.
+
+    Returns the list of (date_str, side) pairs actually changed.
+    """
+    cli_by_date = fetch_recent_cli_finals()
+    if not cli_by_date:
+        return []
+
+    rows = _load_rows()
+    sample = get_observation_history(station_id, limit=5)
+    tzinfo = sample["time"].iloc[0].tzinfo
+    today_local = datetime.now(tzinfo).date()
+
+    changed = []
+    for row in rows:
+        if row["station"] != station_id.upper():
+            continue
+        day = date.fromisoformat(row["date"])
+        if (today_local - day).days > lookback_days:
+            continue
+        cli = cli_by_date.get(day)
+        if cli is None:
+            continue
+
+        prediction = None
+        for side, series_ticker in (("high", HIGH_SERIES), ("low", LOW_SERIES)):
+            side_record = row.get(side)
+            if side_record is None or side_record.get("actual_peak_temp_source", "stream") != "stream":
+                continue
+            if cli.get(f"{side}_f") is None:
+                continue  # this specific side is itself "MM" in the CLI report - nothing to upgrade to
+
+            actuals = _full_day_actuals(station_id, day)
+            if actuals is None:
+                continue
+            if prediction is None:
+                prediction = get_last_prediction(row["date"])
+            row[side] = _finalize_side(
+                station_id, day, side, actuals, prediction[side], series_ticker, tzinfo, cli
+            )
+            changed.append((row["date"], side))
+
+    if changed:
+        with open(LOG_PATH, "w") as f:
+            for row in rows:
+                f.write(json.dumps(row) + "\n")
+    return changed
 
 
 def _load_records(station_id):

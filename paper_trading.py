@@ -38,6 +38,18 @@ to compute the outcome for BOTH lead times and folds the resolved fields
 directly into the SAME daily_performance.jsonl record it already writes -
 per the spec, no separate tracking table.
 
+Settlement value: resolve_paper_trade() is handed whatever
+daily_performance.py decided "actual_temp" is for that side (NWS's CLI
+report if available at finalize time, else the observation stream -
+see daily_performance.py's module docstring and nws_climate.py). A bet
+finalized before CLI was retained/published gets resolved off the
+stream value initially, then daily_performance.reconcile_stream_
+fallback_actuals() re-calls this same function with the CLI value once
+it becomes available and overwrites the stored resolution - resolve_
+paper_trade() itself is pure (bet parameters in, outcome out, no
+side effects), so nothing special is needed here to support that; the
+reconciliation lives entirely on daily_performance.py's side.
+
 Probability model: the model's own uncertainty band is not a calibrated
 confidence interval as-is - weather_estimator.backtest()'s own
 pct_within_uncertainty_band shows real coverage well below what the band
