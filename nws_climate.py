@@ -40,7 +40,7 @@ import requests
 NWS_API_BASE = "https://api.weather.gov"
 CLIMATE_PRODUCT_CODE = "CLI"
 CLIMATE_LOCATION_ID = "SEW"  # WFO Seattle - distinct from the ASOS station id (KSEA) used elsewhere
-USER_AGENT = "(ksea-weather-dashboard, github.com/meganfinnrigney-eng/weather)"
+USER_AGENT = "(ksea-weather-dashboard, github.com/hobbescodez/weather)"
 
 _HEADERS = {"User-Agent": USER_AGENT}
 
