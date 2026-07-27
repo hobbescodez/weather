@@ -4,3 +4,9 @@ __pycache__/
 
 # Local Claude Code session settings - machine/session-specific, not project config
 .claude/
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example
