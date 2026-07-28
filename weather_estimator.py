@@ -523,6 +523,54 @@ def compute_offshore_flow_index(interior_gap_signal):
 # 30-45 minutes earlier than where the actual daily max was showing up.
 PEAK_HEAT_FRACTION = 0.70
 
+# Floor and ramp of diurnal_damping_factor. The floor is the multiplier
+# applied to the raw trend when the projection window touches an
+# inflection point (sunrise or peak-heat hour); the ramp is how many
+# hours of distance from that point it takes to fade back to trusting
+# the raw trend fully.
+#
+# Baseline floor/ramp for diurnal_damping_factor, governing ordinary
+# estimate_temp calls at arbitrary target times. Left at the original
+# 0.35: a backtest sweep found its bias on those calls was already near
+# zero (-0.27F at 3h lead), so raising it bought nothing and cost MAE
+# (3.58 -> 3.76F at 3h, 7.39 -> 8.03F at 6h). Damping hard here is
+# correct - when the window sits ON a turning point the measured slope
+# is about to reverse.
+DIURNAL_DAMPING_FLOOR = 0.35
+DIURNAL_DAMPING_RAMP_HOURS = 6.0
+
+# Separate, looser floor used ONLY when projecting the daily high, where
+# the target time IS the peak-heat hour. That case is structurally
+# different and was structurally broken: because dist_target is 0 by
+# construction, closest_approach is 0 on every such call and the factor
+# was pinned at exactly the baseline 0.35 - not a worst case but the only
+# case - keeping ~35% of the trend's remaining rise, less again after
+# cloud/wind damping. Measured against CLISEA actuals that compressed the
+# predicted daily range by 3.1F at 3h lead and 4.6F at 4h.
+#
+# The physical difference justifying a separate constant: a window
+# sitting on a turning point has an unreliable slope (baseline case,
+# damp hard), whereas a window mid-rise aiming at the peak has a
+# perfectly well-measured slope and only needs discounting for the
+# curve flattening as it approaches the top. Those want different
+# numbers, and conflating them is what produced the compression.
+#
+# 0.70 is the mean-MAE minimum of a 0.35-1.00 sweep by
+# backtest_peak_projection over 6 days. Bias and MAE both improve at
+# every lead time tested; past ~0.8 bias keeps shrinking but MAE at 4h
+# climbs sharply, so this is not simply "as high as possible".
+#
+# What it does NOT fix: compression at 6h+ lead, which stays near -6F at
+# 6h and -11.5F at 8h at any floor, and barely moves when
+# TREND_HORIZON_HOURS goes from 6 to 12. Six-plus hours before the peak
+# it is still early morning and the local trend carries no information
+# about the afternoon high. That is a real limit of a local-trend model,
+# not a mistuned constant. Closing it means leaning harder on the NWS
+# blend at long lead, which cannot be backtested here (no historical
+# forecasts - see estimate_from_df) and so has not been changed on a
+# guess.
+PEAK_PROJECTION_DAMPING_FLOOR = 0.70
+
 
 def _hour_to_datetime(base_date, hour_decimal, tzinfo):
     """Convert a decimal hour (e.g. 15.65) on a given date into an aware datetime."""
@@ -534,13 +582,29 @@ def _hour_to_datetime(base_date, hour_decimal, tzinfo):
     return datetime.combine(base_date, time(h, m), tzinfo=tzinfo)
 
 
-def diurnal_damping_factor(current_time, hours_ahead, lat, lon):
+def diurnal_damping_factor(current_time, hours_ahead, lat, lon,
+                           floor=None, ramp=None):
     """
     Multiplier applied to the raw trend. Damps hardest when the window
     crosses near actual sunrise (bottom of curve) or a few hours after
     sunrise-to-sunset midpoint (rough proxy for peak heating), using real
     sun times for that date instead of hardcoded hours.
+
+    floor/ramp default to DIURNAL_DAMPING_FLOOR / DIURNAL_DAMPING_RAMP_HOURS
+    and exist so backtest_peak_projection can sweep them without
+    monkey-patching module state.
+
+    Note the interaction that made the floor matter so much: when this is
+    called to project the DAILY HIGH, target_hour is the peak-heat hour by
+    construction, so dist_target is 0 and closest_approach is 0 on every
+    such call - the factor is pinned at exactly `floor` regardless of lead
+    time or anything else. The floor is therefore not a worst case for
+    peak projection; it is the only case. See DIURNAL_DAMPING_FLOOR.
     """
+    if floor is None:
+        floor = DIURNAL_DAMPING_FLOOR
+    if ramp is None:
+        ramp = DIURNAL_DAMPING_RAMP_HOURS
     sunrise_h, sunset_h = get_sun_times(lat, lon, current_time.date())
     peak_h = sunrise_h + (sunset_h - sunrise_h) * PEAK_HEAT_FRACTION
 
@@ -556,7 +620,7 @@ def diurnal_damping_factor(current_time, hours_ahead, lat, lon):
     dist_target = min(circular_dist(target_hour, p) for p in inflection_points)
 
     closest_approach = min(dist_now, dist_target)
-    damping = min(1.0, 0.35 + closest_approach / 6)
+    damping = min(1.0, floor + closest_approach / ramp)
     return damping
 
 
@@ -670,6 +734,7 @@ def estimate_from_df(
     df, hours_ahead, lat, lon,
     use_nws_forecast=True, nws_blend_mode="divergence",
     use_gradient=True, df_upwind=None, df_strait=None, df_interior_gap=None,
+    damping_floor=None,
 ):
     """
     Core estimation logic, given a dataframe of observations. Reused by both
@@ -696,6 +761,8 @@ def estimate_from_df(
     df_upwind / df_strait / df_interior_gap: see get_pressure_gradient /
         get_station_network_signals. Let a caller (backtest) pre-fetch each
         role's data once instead of re-fetching per rolling window.
+    damping_floor: override for DIURNAL_DAMPING_FLOOR, so
+        backtest_peak_projection can sweep it. None uses the module value.
     """
     latest = df.iloc[-1]
     now = latest["time"]
@@ -711,7 +778,7 @@ def estimate_from_df(
         if slope < 0 and spread_slope < 0:
             spread_adjustment = min(0.5, abs(spread_slope) * hours_ahead * 0.1)
 
-    diurnal_damping = diurnal_damping_factor(now, hours_ahead, lat, lon)
+    diurnal_damping = diurnal_damping_factor(now, hours_ahead, lat, lon, floor=damping_floor)
     sky_wind_damping = _cloud_wind_damping(df)
     combined_damping = diurnal_damping * sky_wind_damping
 
@@ -893,7 +960,12 @@ def estimate_daily_extremes(station_id, obs_limit=8):
 
     if hour < peak_today:
         horizon = min(peak_today - hour, TREND_HORIZON_HOURS)
-        peak_est = estimate_from_df(df, horizon, lat, lon)
+        # PEAK_PROJECTION_DAMPING_FLOOR, not the baseline: this call aims
+        # at the peak-heat hour itself, the case diurnal_damping_factor
+        # pins to the floor by construction. See that constant.
+        peak_est = estimate_from_df(
+            df, horizon, lat, lon, damping_floor=PEAK_PROJECTION_DAMPING_FLOOR
+        )
         estimated_high = max(observed_high, peak_est["estimated_temp_f"])
         high_status = "projected"  # today's peak-heat hour hasn't happened yet
     else:
@@ -1353,3 +1425,89 @@ if __name__ == "__main__":
     results, summary = backtest(station, hours_ahead=3, lookback_days=5)
     print(summary)
     print(results.tail(10))
+
+
+def backtest_peak_projection(station_id="KSEA", actuals_by_date=None,
+                             leads=(1, 2, 3, 4, 6, 8), floors=(PEAK_PROJECTION_DAMPING_FLOOR,),
+                             lookback_days=7, obs_limit=8):
+    """
+    Backtests the DAILY-HIGH projection specifically, which backtest()
+    above does not cover - that one scores estimate_temp at a fixed
+    hours_ahead, whereas the number the dashboard and the Kalshi markets
+    actually care about is estimate_daily_extremes' projected high, whose
+    target time is always the peak-heat hour.
+
+    That distinction is the whole point: because the target IS the
+    inflection point, diurnal_damping_factor's closest_approach is always
+    0 on these calls and the damping is pinned at DIURNAL_DAMPING_FLOOR.
+    Sweeping `floors` here is what fits that constant against real
+    outcomes instead of guessing it.
+
+    For each day with a known actual and each lead time, reconstructs the
+    observation window as it stood that many hours before the peak and
+    re-runs the same projection estimate_daily_extremes would have made,
+    including the `max(observed_so_far, projection)` floor.
+
+    use_nws_forecast is off, exactly as in backtest() and for the same
+    reason: forecastHourly only exposes the forecast as issued now, so
+    there is no historical forecast to blend. That means these numbers
+    isolate the trend/damping component - live estimates blend toward
+    NWS and will land closer to it than this shows.
+
+    actuals_by_date: {date -> actual_high_f}. Pass CLI values
+    (nws_climate.fetch_recent_cli_finals) rather than stream maxima when
+    the question is settlement accuracy.
+
+    Returns {floor: {lead: {"n","bias","mae","mean_predicted"}}}.
+    """
+    lat, lon, _ = get_station_location(station_id)
+    end = datetime.now(PST)
+    start = end - timedelta(days=lookback_days)
+    full_df = get_observation_history(station_id, start=start, end=end)
+    if full_df.empty:
+        raise ValueError("no observations in the backtest window")
+
+    pad = timedelta(minutes=20)
+    upwind_df, _ = _fetch_upwind_df(start - pad, end + pad)
+    use_gradient = upwind_df is not None
+    strait_df = interior_df = None
+    if use_gradient:
+        strait_df, _ = _fetch_role_df("strait", start - pad, end + pad)
+        interior_df, _ = _fetch_role_df("interior_gap", start - pad, end + pad)
+
+    results = {}
+    for floor in floors:
+        per_lead = {}
+        for lead in leads:
+            errs, preds = [], []
+            for day, actual in sorted((actuals_by_date or {}).items()):
+                sunrise_h, sunset_h = get_sun_times(lat, lon, day)
+                peak_h = sunrise_h + (sunset_h - sunrise_h) * PEAK_HEAT_FRACTION
+                peak_time = _hour_to_datetime(day, peak_h, full_df["time"].iloc[0].tzinfo)
+                as_of = peak_time - timedelta(hours=lead)
+
+                window = full_df[full_df["time"] <= as_of].tail(obs_limit)
+                if len(window) < 3:
+                    continue
+                midnight = datetime.combine(day, time(0, 0), tzinfo=as_of.tzinfo)
+                so_far = full_df[(full_df["time"] >= midnight) & (full_df["time"] <= as_of)]
+                observed_high = float(so_far["temp_f"].max()) if not so_far.empty else -math.inf
+
+                horizon = min(lead, TREND_HORIZON_HOURS)
+                est = estimate_from_df(
+                    window, horizon, lat, lon,
+                    use_nws_forecast=False, use_gradient=use_gradient,
+                    df_upwind=upwind_df, df_strait=strait_df, df_interior_gap=interior_df,
+                    damping_floor=floor,
+                )
+                predicted = max(observed_high, est["estimated_temp_f"])
+                errs.append(predicted - actual)
+                preds.append(predicted)
+            per_lead[lead] = {
+                "n": len(errs),
+                "bias": round(sum(errs) / len(errs), 2) if errs else None,
+                "mae": round(sum(abs(e) for e in errs) / len(errs), 2) if errs else None,
+                "mean_predicted": round(sum(preds) / len(preds), 2) if preds else None,
+            }
+        results[floor] = per_lead
+    return results
