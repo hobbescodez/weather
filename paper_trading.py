@@ -63,6 +63,39 @@ resolution can also check whether the actual temp landed inside them -
 per lead time, since a stated band evaluated 1hr vs 2hr before peak isn't
 necessarily equally well-calibrated at both.
 
+Tail brackets (bug fixed 2026-07-27, ledger reset): bracket selection
+used to rank on each bracket's raw probability minus its market price,
+which mechanically picked open-ended "X or above" / "X or below"
+brackets essentially every time. A tail integrates every degree from its
+strike to infinity while an interior bracket covers 2F, so the tail
+always carried far more mass - 0.2-0.6 against a market price of $0.01 -
+and max-edge chose it by construction. The first 15 bets were 15-for-15
+open-ended brackets, 11 of them entered at the $0.01 floor, and went
+1-for-15; that ledger was measuring the selection rule, not the model,
+and has been archived (see paper_trading_ledger_archive/) rather than
+carried forward. Selection now ranks on _credible_probability, which
+scores every bracket over at most the market's own typical interior
+width and then clips that to within CREDIBLE_SIGMA_SPAN sigma of the
+point estimate. One uniform rule, no special-casing: interior brackets
+are unaffected, an open-ended bracket is scored on the slice just past
+its strike rather than on an unbounded integral, and a bracket whose
+strike sits beyond the credible window scores 0.0 and is unbettable.
+Each bet stores the true unbounded probability AND the scored one, plus
+both edges, so the size of the haircut stays auditable.
+
+Lead-time direction conflicts: the two legs are independent by design,
+but under the old rule they twice bet opposite tails of the same market
+an hour apart (2026-07-24, both sides) purely because prices moved -
+the forecast hadn't changed. _direction_conflict now compares the second
+leg's bracket against the first's and requires any jump of
+DIRECTION_CONFLICT_MIN_BRACKET_GAP or more brackets to be matched by a
+real move in the point estimate, blocking it otherwise. Every
+comparison is written to the edge log whether it blocks or not, so a
+genuine intraday change of view is legible as a logged point-estimate
+shift rather than something to be reverse-engineered from bracket
+choice. Every bet now stores point_estimate_f, which is what makes that
+comparison possible at all.
+
 Edge threshold: MIN_EDGE below is a deliberate, adjustable choice (not a
 derived constant) - "don't force a bet without a real edge," per the
 spec, needs some numeric cutoff, and 15 percentage points was picked as
@@ -141,6 +174,24 @@ STAKE = 0.50
 MIN_EDGE = 0.15
 FALLBACK_COVERAGE = 0.40  # used only if a fresh backtest can't be computed
 
+# How far from the point estimate the model's fitted distribution is
+# treated as trustworthy, in units of the calibrated sigma. Bracket
+# probabilities used for SELECTION are clipped to this window - see
+# _credible_probability and the "Tail brackets" section of the module
+# docstring. Deliberate, adjustable choice like MIN_EDGE, not a derived
+# constant: 1.5 sigma is ~87% of a Normal's mass, so it keeps the region
+# the coverage backtest actually speaks to and discards the far tails it
+# doesn't.
+CREDIBLE_SIGMA_SPAN = 1.5
+
+# Direction-conflict guard between the two lead-time legs (see
+# _direction_conflict). A gap of 2 means "not the same and not adjacent"
+# - one whole bracket sits between them - so ordinary 1-2F drift between
+# 2hr and 1hr never trips it. The point-estimate shift needed to justify
+# such a jump is in whole degrees F.
+DIRECTION_CONFLICT_MIN_BRACKET_GAP = 2
+DIRECTION_CONFLICT_MIN_POINT_SHIFT_F = 2.0
+
 
 def _normal_cdf(x):
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
@@ -187,11 +238,170 @@ def _calibrated_sigma(half_band, coverage):
 
 
 def _bucket_probability(mean, sigma, floor, cap):
+    """The bracket's true, unbounded probability under the calibrated
+    Normal - i.e. the honest probability that THIS CONTRACT pays out.
+    Correct for reporting and for any expected-value arithmetic; NOT
+    what bracket selection should rank on, because for an open-ended
+    tail it integrates to infinity through a region the model's
+    calibration has never been tested in. Use _credible_probability
+    for selection."""
     lo = -math.inf if floor is None else floor
     hi = math.inf if cap is None else cap
     p_hi = 1.0 if hi == math.inf else _normal_cdf((hi - mean) / sigma)
     p_lo = 0.0 if lo == -math.inf else _normal_cdf((lo - mean) / sigma)
     return max(0.0, p_hi - p_lo)
+
+
+def _is_tail_bracket(bracket):
+    return bracket.get("floor_strike") is None or bracket.get("cap_strike") is None
+
+
+def _typical_interior_width(brackets):
+    """Median floor-to-cap span of the market's interior brackets, in the
+    same units _bucket_probability integrates over. Used to give the
+    open-ended brackets a comparable width for selection purposes."""
+    widths = [
+        b["cap_strike"] - b["floor_strike"]
+        for b in brackets
+        if b.get("floor_strike") is not None and b.get("cap_strike") is not None
+    ]
+    if not widths:
+        return 1.0
+    widths.sort()
+    return widths[len(widths) // 2]
+
+
+def _credible_probability(mean, sigma, floor, cap, interior_width,
+                          span=CREDIBLE_SIGMA_SPAN):
+    """The part of a bracket's probability the model has any business
+    standing behind, and the quantity bracket selection ranks on.
+
+    This is the fix for the tail-selection bug. Ranking brackets on
+    _bucket_probability made open-ended brackets win essentially every
+    time - "X or above" integrates every degree from the strike to
+    infinity, while an interior bracket gets one or two, so the tail
+    accumulated 0.2-0.6 of mass against a market price of $0.01 and
+    max-edge picked it by construction. That was never the model
+    disagreeing with the market; it was a width comparison dressed up
+    as a probability comparison.
+
+    Two restrictions, both applied to every bracket by the same rule
+    rather than by special-casing tails:
+
+    1. Width. A bracket is scored over at most `interior_width` degrees
+       - the market's own typical interior span. Interior brackets are
+       already that wide so nothing changes for them; an open-ended
+       bracket is scored on the slice just past its strike, which is
+       where its probability would actually have to come from, instead
+       of on an unbounded integral.
+    2. Distance. That slice is then clipped to within `span` sigma of
+       the point estimate, the region the coverage backtest actually
+       speaks to. A bracket sitting further out than that scores 0.0
+       and cannot be bet at all.
+
+    Deliberately conservative, and deliberately NOT the same event the
+    market prices: for a tail this is a lower bound on the contract's
+    true probability, compared against the price of the whole tail.
+    Both numbers are stored on every bet (model_implied_probability =
+    true and unbounded, model_credible_probability = this) so the size
+    of the haircut stays visible rather than folded into one figure.
+    """
+    if sigma <= 0:
+        return 0.0
+    if floor is None and cap is None:
+        return 0.0
+    if floor is None:                     # "X or below" - slice below the strike
+        hi = float(cap)
+        lo = hi - interior_width
+    elif cap is None:                     # "X or above" - slice above the strike
+        lo = float(floor)
+        hi = lo + interior_width
+    else:
+        lo, hi = float(floor), float(cap)
+
+    lo = max(lo, mean - span * sigma)
+    hi = min(hi, mean + span * sigma)
+    if hi <= lo:
+        return 0.0
+    return max(0.0, _normal_cdf((hi - mean) / sigma) - _normal_cdf((lo - mean) / sigma))
+
+
+def _bracket_index(brackets, label):
+    for i, b in enumerate(brackets):
+        if b["label"] == label:
+            return i
+    return None
+
+
+def _direction_conflict(brackets, chosen_label, point, other_bet):
+    """Guards against the two lead-time legs betting opposite directions
+    on the same day's market without the model's underlying view having
+    actually moved.
+
+    This happened on 2026-07-24 under the old selection rule: the 2hr leg
+    took "90 or above" and the 1hr leg took "81 or below" on the high
+    market, and on the same day the low legs took "62 or above" and "53
+    or below". Nothing in the stored record showed why - the flip lived
+    entirely in bracket choice, driven by prices moving under a max-edge
+    rule, not by the forecast changing. A genuine change of mind is
+    legitimate and worth having; a silent one is not distinguishable
+    from noise after the fact.
+
+    Rule: if the new leg's bracket sits DIRECTION_CONFLICT_MIN_BRACKET_GAP
+    or more brackets away from the other leg's (far enough that at least
+    one whole bracket lies between them, so ordinary 1-2F drift never
+    trips it), that jump has to be explained by the point estimate
+    itself moving at least DIRECTION_CONFLICT_MIN_POINT_SHIFT_F in the
+    SAME direction. Otherwise the bet is blocked.
+
+    Returns a dict describing the comparison, always - it is logged
+    whether or not it blocks, which is the point: an hour-to-hour change
+    of view should be legible in the log, not inferable from bracket
+    choice.
+    """
+    other_label = other_bet.get("simulated_bucket_chosen")
+    other_point = other_bet.get("point_estimate_f")
+    i_new = _bracket_index(brackets, chosen_label)
+    i_other = _bracket_index(brackets, other_label)
+
+    info = {
+        "other_leg_lead_time_hint": other_bet.get("lead_time_hint"),
+        "other_leg_bucket": other_label,
+        "other_leg_point_estimate_f": other_point,
+        "point_estimate_shift_f": (
+            round(point - other_point, 2) if other_point is not None else None
+        ),
+        "bracket_gap": None,
+        "direction_conflict": False,
+        "conflict_justified_by_point_shift": None,
+        "blocked": False,
+    }
+    if i_new is None or i_other is None:
+        # Bracket set changed between legs (market re-listed). Can't
+        # compare positions meaningfully; don't block on it.
+        return info
+
+    gap = i_new - i_other
+    info["bracket_gap"] = gap
+    if abs(gap) < DIRECTION_CONFLICT_MIN_BRACKET_GAP:
+        return info
+
+    info["direction_conflict"] = True
+    if other_point is None:
+        # Pre-guard bet with no stored point estimate: nothing to justify
+        # the jump against, so it can't clear the bar.
+        info["conflict_justified_by_point_shift"] = False
+        info["blocked"] = True
+        return info
+
+    shift = point - other_point
+    justified = (
+        abs(shift) >= DIRECTION_CONFLICT_MIN_POINT_SHIFT_F
+        and (shift > 0) == (gap > 0)
+    )
+    info["conflict_justified_by_point_shift"] = justified
+    info["blocked"] = not justified
+    return info
 
 
 def _load_pending():
@@ -318,32 +528,69 @@ def place_paper_trade(station_id, side, lead_time_hint="1hr"):
     if market is None:
         return None
 
+    # Ranked on _credible_probability, NOT _bucket_probability - see that
+    # function for why raw unbounded tail mass can't be compared against
+    # a 2F interior bracket. The raw probability is still computed and
+    # stored alongside, so the size of the discount stays auditable.
+    interior_width = _typical_interior_width(market["brackets"])
     best = None
     for b in market["brackets"]:
         if b["last_price"] is None:
             continue
-        model_p = _bucket_probability(point, sigma, b["floor_strike"], b["cap_strike"])
-        edge = model_p - b["last_price"]
+        raw_p = _bucket_probability(point, sigma, b["floor_strike"], b["cap_strike"])
+        credible_p = _credible_probability(
+            point, sigma, b["floor_strike"], b["cap_strike"], interior_width
+        )
+        edge = credible_p - b["last_price"]
         if best is None or edge > best["edge"]:
-            best = {"bracket": b, "model_p": model_p, "market_p": b["last_price"], "edge": edge}
+            best = {
+                "bracket": b,
+                "model_p": raw_p,
+                "credible_p": credible_p,
+                "market_p": b["last_price"],
+                "edge": edge,
+                "edge_uncapped": raw_p - b["last_price"],
+            }
+
+    conflict = None
+    other_hint = next(h for h in LEAD_TIME_HINTS if h != lead_time_hint)
+    other_bet = side_pending.get(other_hint)
+    if best is not None and other_bet is not None:
+        conflict = _direction_conflict(
+            market["brackets"], best["bracket"]["label"], point, other_bet
+        )
 
     if best is not None:
-        _log_edge_evaluation({
+        entry = {
             "date": date_str,
             "side": side,
             "lead_time_hint": lead_time_hint,
             "evaluated_at": now.isoformat(),
             "hours_ahead": round(hours_ahead, 2),
+            "point_estimate_f": round(point, 2),
             "bucket_label": best["bracket"]["label"],
+            "bucket_is_tail": _is_tail_bracket(best["bracket"]),
             "model_implied_probability": round(best["model_p"], 4),
+            "model_credible_probability": round(best["credible_p"], 4),
             "market_implied_probability": round(best["market_p"], 4),
             "edge": round(best["edge"], 4),
+            "edge_uncapped": round(best["edge_uncapped"], 4),
             "min_edge_threshold": MIN_EDGE,
-            "bet_placed": best["edge"] >= MIN_EDGE,
-        })
+            "credible_sigma_span": CREDIBLE_SIGMA_SPAN,
+            "bet_placed": best["edge"] >= MIN_EDGE and not (conflict or {}).get("blocked"),
+        }
+        if conflict is not None:
+            entry["lead_time_direction_check"] = conflict
+        _log_edge_evaluation(entry)
 
     if best is None or best["edge"] < MIN_EDGE:
         return None  # no meaningful edge today - don't force a bet
+
+    if conflict is not None and conflict["blocked"]:
+        # Opposite-direction jump from the other leg with no matching
+        # move in the point estimate. Logged above with the full
+        # comparison; not placed.
+        return None
 
     bet = {
         "trigger_type": "edge",
@@ -351,11 +598,17 @@ def place_paper_trade(station_id, side, lead_time_hint="1hr"):
         "simulated_bucket_chosen": best["bracket"]["label"],
         "simulated_bucket_floor": best["bracket"]["floor_strike"],
         "simulated_bucket_cap": best["bracket"]["cap_strike"],
+        "simulated_bucket_is_tail": _is_tail_bracket(best["bracket"]),
         "simulated_entry_price": best["market_p"],
         "simulated_stake": STAKE,
+        "point_estimate_f": round(point, 2),
         "model_implied_probability": round(best["model_p"], 4),
+        "model_credible_probability": round(best["credible_p"], 4),
         "market_implied_probability": round(best["market_p"], 4),
         "edge_at_entry": round(best["edge"], 4),
+        "edge_at_entry_uncapped": round(best["edge_uncapped"], 4),
+        "credible_sigma_span": CREDIBLE_SIGMA_SPAN,
+        "lead_time_direction_check": conflict,
         "estimated_range_low_f": lo,
         "estimated_range_high_f": hi,
         "hours_ahead_at_entry": round(hours_ahead, 2),
@@ -425,19 +678,32 @@ def place_unconditional_low_bet(station_id=STATION):
         return None  # nothing to simulate an entry price against
 
     model_p = _bucket_probability(point, sigma, chosen["floor_strike"], chosen["cap_strike"])
+    credible_p = _credible_probability(
+        point, sigma, chosen["floor_strike"], chosen["cap_strike"],
+        _typical_interior_width(market["brackets"]),
+    )
     market_p = chosen["last_price"]
 
+    # This strategy was never exposed to the tail-selection bug - it bets
+    # the bracket containing the point estimate, so it can only land on a
+    # tail when the model genuinely forecasts one, and it ranks nothing.
+    # The credible probability is recorded anyway so both strategies'
+    # bets carry the same fields and stay directly comparable.
     bet = {
         "trigger_type": "unconditional",
         "lead_time_hint": "1hr",
         "simulated_bucket_chosen": chosen["label"],
         "simulated_bucket_floor": chosen["floor_strike"],
         "simulated_bucket_cap": chosen["cap_strike"],
+        "simulated_bucket_is_tail": _is_tail_bracket(chosen),
         "simulated_entry_price": market_p,
         "simulated_stake": STAKE,
+        "point_estimate_f": round(point, 2),
         "model_implied_probability": round(model_p, 4),
+        "model_credible_probability": round(credible_p, 4),
         "market_implied_probability": round(market_p, 4),
         "edge_at_entry": round(model_p - market_p, 4),
+        "credible_sigma_span": CREDIBLE_SIGMA_SPAN,
         "estimated_range_low_f": lo,
         "estimated_range_high_f": hi,
         "hours_ahead_at_entry": round(hours_ahead, 2),
