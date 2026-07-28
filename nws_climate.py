@@ -1,13 +1,18 @@
 """
-Fetches and parses NWS's official daily Climatological Report (CLI
-product, issued by WFO Seattle = SEW) - the actual settlement source
+Fetches and parses NWS's official daily Climatological Report - the
+CLISEA product for Seattle-Tacoma International Airport, the actual
+settlement source
 Kalshi's KXHIGHTSEA/KXLOWTSEA markets use (confirmed via a live
 market's rules_secondary field - see kalshi.py's own docstring). Used
 as the primary source of "actual" high/low throughout
-daily_performance.py and paper_trading.py, in place of the raw ASOS
-observation stream those previously relied on exclusively - spot
-checks found the stream running ~2-3F warm on the high side against
-CLI's own reported values on the days compared.
+daily_performance.py and paper_trading.py, alongside the raw ASOS
+observation stream those previously relied on exclusively. The two
+agree closely once the right product is being read - CLISEA and the
+KSEA stream matched to within ~0.5F on every day checked. An earlier
+version of this module read CLISEW instead (the Seattle WFO office at
+Sand Point, not the airport) and the resulting 2-4F disagreements were
+initially mistaken for the observation stream being biased; see
+CLIMATE_LOCATION_ID.
 
 Two products get issued per calendar day: a PRELIMINARY report around
 5pm ("VALID TODAY AS OF 0500 PM LOCAL TIME") covering only part of the
@@ -39,11 +44,31 @@ import requests
 
 NWS_API_BASE = "https://api.weather.gov"
 CLIMATE_PRODUCT_CODE = "CLI"
-CLIMATE_LOCATION_ID = "SEW"  # WFO Seattle - distinct from the ASOS station id (KSEA) used elsewhere
+
+# MUST be SEA (product CLISEA, "THE SEATTLE-TACOMA WA AIRPORT CLIMATE
+# SUMMARY") - the airport, which is the station KSEA reports from and the
+# one Kalshi settles against.
+#
+# This was originally SEW, which is wrong and cost a week of bad
+# "actual" values. The trap: /products/types/CLI/locations lists SEW
+# with the human label "Seattle/Tacoma, WA" while listing SEA with no
+# label at all, so SEW looks like the obvious choice. But SEW is the
+# Seattle WFO's own office site (Sand Point, on Lake Washington,
+# ~10 miles from the airport and a different microclimate) and its
+# product says "THE SEATTLE WA WFO CLIMATE SUMMARY". The two disagree by
+# 2-4F in BOTH directions depending on the airmass - SEW ran 2-3F cooler
+# than the airport on hot offshore days and 2-4F warmer on marine days -
+# which is exactly the sort of error that looks like model bias rather
+# than a data-source bug.
+#
+# _EXPECTED_SITE_RE below hard-fails any report that isn't the airport,
+# so this can't silently drift again.
+CLIMATE_LOCATION_ID = "SEA"
 USER_AGENT = "(ksea-weather-dashboard, github.com/hobbescodez/weather)"
 
 _HEADERS = {"User-Agent": USER_AGENT}
 
+_EXPECTED_SITE_RE = re.compile(r"SEATTLE-TACOMA\s+WA\s+AIRPORT", re.IGNORECASE)
 _SUMMARY_DATE_RE = re.compile(r"CLIMATE SUMMARY FOR ([A-Z]+ \d{1,2} \d{4})")
 _PRELIMINARY_RE = re.compile(r"VALID (?:TODAY|YESTERDAY) AS OF")
 _MAX_RE = re.compile(r"^\s*MAXIMUM\s+(-?\d+|MM)", re.MULTILINE)
@@ -71,6 +96,13 @@ def _parse_cli_text(text):
     dict with covers_date/is_final/high_f/low_f. Either temp field can
     be None on a real match if NWS itself reported that side "MM" -
     that's a genuine "missing" from NWS, not a parse failure."""
+    # Station identity is checked before anything else is trusted. Every
+    # CLI product parses identically, so without this a report for a
+    # different site reads as perfectly valid data for the wrong place -
+    # which is precisely what happened with SEW (see CLIMATE_LOCATION_ID).
+    if not _EXPECTED_SITE_RE.search(text):
+        return None
+
     date_match = _SUMMARY_DATE_RE.search(text)
     if not date_match:
         return None
