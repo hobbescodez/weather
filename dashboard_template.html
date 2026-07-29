@@ -188,6 +188,14 @@
     }
   }
 
+  .hero-precision {
+    font-size: 11.5px;
+    color: var(--text-faint);
+    margin-top: 6px;
+    min-height: 0;
+  }
+  .hero-precision:empty { display: none; }
+
   .content {
     position: relative;
     z-index: 1;
@@ -650,6 +658,10 @@
     <div class="hero">
       <div class="hero-condition">{{condition_text}}</div>
       <div class="hero-temp">{{current_temp}}<sup>°F</sup></div>
+      <!-- Empty for a tenths-precision reading; only appears when the
+           station reported a whole degree C and the F value is therefore
+           a range, not a point. -->
+      <div class="hero-precision">{{current_temp_precision_note}}</div>
       <div class="hero-hilo">
         <span><span class="hilo-arrow-high">↑</span>{{daily_high}}°</span>
         <span><span class="hilo-arrow-low">↓</span>{{daily_low}}°</span>

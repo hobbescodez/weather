@@ -50,6 +50,7 @@ from kalshi import (
     bracket_contains,
 )
 from nws_climate import fetch_recent_cli_finals
+from observation_precision import settlement_band
 from paper_trading import resolve_paper_trade, resolve_unconditional_low_bet, LEAD_TIME_HINTS
 import requests
 
@@ -121,8 +122,13 @@ def _full_day_actuals(station_id, day):
 
     high_idx = df["temp_f"].idxmax()
     low_idx = df["temp_f"].idxmin()
+    # Widest interval between observations that day - how much of the
+    # continuous curve was invisible to us, which is what sizes the
+    # sampling allowance in observation_precision.settlement_band.
+    gaps = df["time"].sort_values().diff().dt.total_seconds().dropna() / 60
     return {
         "df": df,
+        "max_gap_minutes": float(gaps.max()) if len(gaps) else None,
         "high_temp": float(df.loc[high_idx, "temp_f"]),
         "high_time": df.loc[high_idx, "time"],
         "low_temp": float(df.loc[low_idx, "temp_f"]),
@@ -337,7 +343,22 @@ def _finalize_side(station_id, day, side, actuals, prediction, series_ticker, tz
         "paper_trade_unconditional": None,
     }
 
-    resolved_bets = resolve_paper_trade(day.isoformat(), side, actual_temp)
+    # When CLI is available it IS the settlement value, exact, so no band
+    # is needed. When we're falling back to the observation stream, that
+    # value is a quantised, discretely-sampled proxy biased in a known
+    # direction (see observation_precision) - so pass its plausible band
+    # and let _resolve_bet decline to settle any bet the band can't
+    # decide. Those stay pending until reconcile_stream_fallback_actuals
+    # picks them up with the real CLI number.
+    settlement_uncertainty = (
+        None if actual_temp_source == "cli"
+        else settlement_band(side, stream_temp, actuals.get("max_gap_minutes"))
+    )
+    record["actual_peak_temp_settlement_band"] = (
+        [round(settlement_uncertainty[0], 2), round(settlement_uncertainty[1], 2)]
+        if settlement_uncertainty else None
+    )
+    resolved_bets = resolve_paper_trade(day.isoformat(), side, actual_temp, settlement_uncertainty)
     for lead_time_hint, resolved_bet in resolved_bets.items():
         if resolved_bet is None:
             continue
@@ -356,7 +377,9 @@ def _finalize_side(station_id, day, side, actuals, prediction, series_ticker, tz
         }
 
     if side == "low":
-        resolved_unconditional = resolve_unconditional_low_bet(day.isoformat(), actual_temp)
+        resolved_unconditional = resolve_unconditional_low_bet(
+            day.isoformat(), actual_temp, settlement_uncertainty
+        )
         if resolved_unconditional is not None:
             record["paper_trade_unconditional"] = {
                 "trigger_type": resolved_unconditional["trigger_type"],

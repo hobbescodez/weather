@@ -719,18 +719,43 @@ def place_unconditional_low_bet(station_id=STATION):
     return bet
 
 
-def _resolve_bet(bet, actual_temp):
+def _bucket_label_for(bet, temp):
+    for b in bet.get("all_buckets", []):
+        if bracket_contains(b, temp):
+            return b["label"]
+    return None
+
+
+def _settlement_is_ambiguous(bet, band):
+    """Whether a stream-only settlement band is too wide to decide this
+    bet - i.e. its two ends fall in different brackets.
+
+    The point of the gate: an observation-stream extreme is not the
+    settlement value, it's a quantised, discretely-sampled proxy for it
+    (see observation_precision). Resolving off it silently decides real
+    money-shaped outcomes on a number that on 2026-07-28 pointed at "61
+    or above" while the market held 86% on "59 to 60" - and the market
+    was right. When the band spans a boundary we genuinely do not know
+    which side won, so we wait for CLI rather than guess.
+    """
+    if band is None:
+        return False
+    lo_label = _bucket_label_for(bet, band[0])
+    hi_label = _bucket_label_for(bet, band[1])
+    return lo_label != hi_label
+
+
+def _resolve_bet(bet, actual_temp, band=None):
     """Shared per-bet resolution math - which bracket actual_temp
     landed in, whether that matches the bet's chosen bracket, and the
     resulting simulated payout - used identically by resolve_paper_
     trade (both lead times) and resolve_unconditional_low_bet, since
     the payout arithmetic doesn't care which strategy chose the
     bracket, only what was bet and what happened."""
-    outcome_bucket = None
-    for b in bet.get("all_buckets", []):
-        if bracket_contains(b, actual_temp):
-            outcome_bucket = b["label"]
-            break
+    if _settlement_is_ambiguous(bet, band):
+        return None  # caller leaves the bet pending; reconciliation retries once CLI lands
+
+    outcome_bucket = _bucket_label_for(bet, actual_temp)
 
     hit = outcome_bucket == bet["simulated_bucket_chosen"]
     stake = bet["simulated_stake"]
@@ -749,7 +774,7 @@ def _resolve_bet(bet, actual_temp):
     return r
 
 
-def resolve_paper_trade(date_str, side, actual_temp):
+def resolve_paper_trade(date_str, side, actual_temp, band=None):
     """
     Called from daily_performance.py's finalize_day() once the actual
     peak is known. Resolves BOTH lead times independently - never
@@ -765,12 +790,12 @@ def resolve_paper_trade(date_str, side, actual_temp):
     resolved = {}
     for lead_time_hint in LEAD_TIME_HINTS:
         bet = day_bets.get(lead_time_hint)
-        resolved[lead_time_hint] = _resolve_bet(bet, actual_temp) if bet is not None else None
+        resolved[lead_time_hint] = _resolve_bet(bet, actual_temp, band) if bet is not None else None
 
     return resolved
 
 
-def resolve_unconditional_low_bet(date_str, actual_temp):
+def resolve_unconditional_low_bet(date_str, actual_temp, band=None):
     """
     Resolves the unconditional low bet (see place_unconditional_low_bet)
     the same way resolve_paper_trade resolves everything else - against
@@ -784,7 +809,7 @@ def resolve_unconditional_low_bet(date_str, actual_temp):
     """
     pending = _load_pending()
     bet = pending.get(date_str, {}).get("low_unconditional")
-    return _resolve_bet(bet, actual_temp) if bet is not None else None
+    return _resolve_bet(bet, actual_temp, band) if bet is not None else None
 
 
 def _load_2hr_schedule():

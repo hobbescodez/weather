@@ -28,6 +28,7 @@ from weather_estimator import (
     OFFSHORE_FLOW_INDEX_THRESHOLD,
 )
 from kalshi import HIGH_SERIES, LOW_SERIES, get_market_for_date, get_event_hourly_volume, bracket_contains
+from observation_precision import format_reading, precision_note, is_whole_celsius
 from calibration_log import record_snapshot, next_day_confidence_pct, MIN_NEXT_DAY_SAMPLES
 from daily_performance import (
     finalize_pending_days,
@@ -706,7 +707,11 @@ def main():
         "station_id": est["station"],
         "as_of_time": _fmt_time(now),
         "as_of_date": now.strftime("%A, %B %-d"),
-        "current_temp": f"{temps[-1]:.2f}",  # raw observed value, not rounded like est['current_temp_f']
+        # Rendered at the reading's real resolution: 69.80 is exactly 21.0C,
+        # a whole-degree-C report carrying +/-0.9F, so two decimals were
+        # inventing precision the sensor never reported.
+        "current_temp": format_reading(temps[-1], unit=""),
+        "current_temp_precision_note": precision_note(temps[-1]) or "",
         "target_time": _fmt_day_time(est["target_time"]),
         "estimated_temp": f"{est['estimated_temp_f']:.2f}",
         "range_low": f"{lo:.2f}",
@@ -731,15 +736,15 @@ def main():
         "sparkline_svg": svg,
         "sparkline_hours": SPARKLINE_HOURS,
         "data_json": json.dumps(est, default=str, indent=2),
-        "daily_high": f"{extremes['estimated_high_f']:.2f}",
+        "daily_high": format_reading(extremes["estimated_high_f"], unit=""),
         "daily_high_caption": HIGH_CAPTIONS[extremes["high_status"]],
         "est_peak_time": _fmt_time(extremes["estimated_high_time"]),
-        "daily_low": f"{extremes['estimated_low_f']:.2f}",
+        "daily_low": format_reading(extremes["estimated_low_f"], unit=""),
         "daily_low_caption": LOW_CAPTIONS[extremes["low_status"]],
         "est_trough_time": _fmt_day_time(extremes["estimated_low_time"]),
-        "observed_high": f"{extremes['observed_high_so_far_f']:.2f}",
+        "observed_high": format_reading(extremes["observed_high_so_far_f"], unit=""),
         "observed_high_time": _fmt_time(extremes["observed_high_so_far_time"]),
-        "observed_low": f"{extremes['observed_low_so_far_f']:.2f}",
+        "observed_low": format_reading(extremes["observed_low_so_far_f"], unit=""),
         "observed_low_time": _fmt_time(extremes["observed_low_so_far_time"]),
         "tomorrow_high": f"{extremes['tomorrow_high_f']:.2f}",
         "tomorrow_confidence_pct": tomorrow_high_confidence_pct,
@@ -757,9 +762,9 @@ def main():
             else f"reference confidence {tomorrow_low_confidence_pct}%*"
         ),
         "tomorrow_low_hint": tomorrow_hint(extremes["tomorrow_low_source"], measured_conf["low"], measured_conf["n_low"]),
-        "yesterday_high": f"{extremes['yesterday_high_f']:.2f}" if extremes["yesterday_high_f"] is not None else "—",
+        "yesterday_high": format_reading(extremes["yesterday_high_f"], unit=""),
         "yesterday_high_time": _fmt_time(extremes["yesterday_high_time"]) if extremes["yesterday_high_time"] is not None else "—",
-        "yesterday_low": f"{extremes['yesterday_low_f']:.2f}" if extremes["yesterday_low_f"] is not None else "—",
+        "yesterday_low": format_reading(extremes["yesterday_low_f"], unit=""),
         "yesterday_low_time": _fmt_time(extremes["yesterday_low_time"]) if extremes["yesterday_low_time"] is not None else "—",
         "kalshi_high_ticker": kalshi_high["event_ticker"] if kalshi_high else "no open market",
         "kalshi_high_rows": build_kalshi_rows(
