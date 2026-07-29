@@ -1105,8 +1105,16 @@ def estimate_daily_extremes(station_id, obs_limit=8):
             if low_status == "today":
                 v = _nws_forecast_temp_at(pending_forecast_df, low_time)
                 nws_low_forecast_at_target_f = round(float(v), 1) if v is not None else None
-        except Exception:
-            pass  # NWS forecast unavailable - leave both None, not a hard failure
+        except Exception as e:
+            # Not a hard failure - both stay None and the day simply has no
+            # NWS comparison. But it must not be SILENT: this capture is the
+            # only chance to record it (forecastHourly covers the future
+            # only, so it cannot be reconstructed later), and a quiet failure
+            # here loses that day's model-vs-NWS comparison permanently with
+            # nothing in the logs to say why. Same class of defect as the
+            # band-coverage bug; see calibration_health.
+            print(f"weather_estimator: NWS forecast capture at target time failed ({e}); "
+                  "this day will have no model-vs-NWS comparison")
 
     # Tomorrow's high and low: prefer the actual NWS gridpoint forecast
     # (HRRR-based, real atmospheric dynamics - it can see a heat event

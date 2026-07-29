@@ -530,9 +530,25 @@ def main():
 
     try:
         reconcile_stream_fallback_actuals(STATION, lookback_days=5)
-        reconcile_peak_time_windows(STATION, lookback_days=10)
     except Exception as e:
         print(f"daily_performance: reconcile_stream_fallback_actuals failed: {e}")
+
+    try:
+        reconcile_peak_time_windows(STATION, lookback_days=10)
+    except Exception as e:
+        print(f"daily_performance: reconcile_peak_time_windows failed: {e}")
+
+    # Loudly surface any calibration input that is running on a fallback
+    # constant instead of a real computed value. The band-coverage bug was
+    # invisible for its entire life precisely because a fallback looked
+    # identical to success; this makes the difference legible on every
+    # refresh. Never fatal - a degraded input still produces a page.
+    try:
+        import calibration_health
+        if calibration_health.report(STATION):
+            print("calibration: all sources computed (no fallbacks in use)")
+    except Exception as e:
+        print(f"calibration_health: check failed: {e}")
 
     try:
         lock_result = get_or_lock_daily_targets(STATION)
