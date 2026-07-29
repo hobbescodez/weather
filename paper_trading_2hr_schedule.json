@@ -97,6 +97,12 @@
       "target_time": "2026-07-29T03:44:00-07:00",
       "locked_at": "2026-07-28T06:10:00-07:00",
       "skipped_missed_window": false
+    },
+    "high": {
+      "predicted_peak_time_at_lock": "2026-07-29T16:15:00-07:00",
+      "target_time": "2026-07-29T14:15:00-07:00",
+      "locked_at": "2026-07-29T00:00:00-07:00",
+      "skipped_missed_window": false
     }
   }
 }
