@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 from astral import LocationInfo
 from astral.sun import sun
 
+from asos_extremes import collect_remark_extremes, refine_extreme
 from nws_climate import (
     get_cli_final_actuals_for_date,
     cli_final_lag_hours,
@@ -153,6 +154,10 @@ def get_observation_history(station_id, limit=8, start=None, end=None):
             "pressure_inhg": pressure_pa / 3386.39 if pressure_pa is not None else None,
             "relative_humidity": rh,
             "cloud_fraction": _cloud_fraction(cloud_layers),
+            # Carried through because the METAR remarks hold the station's
+            # own 6-hourly max/min from 1-minute data - the only
+            # un-quantised extreme available before CLI. See asos_extremes.
+            "raw_message": props.get("rawMessage"),
         })
 
     if start is not None and end is not None:
@@ -1086,6 +1091,25 @@ def estimate_daily_extremes(station_id, obs_limit=8):
     observed_low = today_obs["temp_f"].min()
     observed_high_time = today_obs.loc[today_obs["temp_f"].idxmax(), "time"]
     observed_low_time = today_obs.loc[today_obs["temp_f"].idxmin(), "time"]
+
+    # The 5-minute feed reports whole degrees Celsius, so its extremes are
+    # 1.8F-granular no matter how many decimals the conversion prints. ASOS
+    # publishes the un-quantised figure in the METAR remarks every six
+    # hours, computed from the same 1-minute record NWS writes the CLI
+    # report from - so when a remark group covers this extreme, it IS the
+    # answer, and the bracket stops being ambiguous. See asos_extremes.
+    observed_high_source = observed_low_source = "observation_stream"
+    try:
+        _cands = collect_remark_extremes(
+            list(today_obs["time"]), list(today_obs.get("raw_message", [None] * len(today_obs)))
+        )
+        observed_high, observed_high_source = refine_extreme(
+            "high", observed_high, observed_high_time, _cands)
+        observed_low, observed_low_source = refine_extreme(
+            "low", observed_low, observed_low_time, _cands)
+    except Exception as e:
+        print(f"weather_estimator: ASOS remark refinement failed ({e}); "
+              "observed extremes stay on the quantised 5-minute feed")
     # Widest gap between today's observations so far. Feeds
     # observation_precision.settlement_band, whose one-sided sampling
     # allowance scales with it - a day sampled every 5 minutes hides much
@@ -1362,6 +1386,11 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         "observed_high_so_far_time": observed_high_time,  # when that actual high was recorded
         "observed_low_so_far_f": round(observed_low, 2),
         "observed_low_so_far_time": observed_low_time,  # when that actual low was recorded
+        # "asos_remark_1min" = the station's own un-quantised figure, precise
+        # enough to settle a bracket on its own. "observation_stream" = the
+        # whole-degree-C feed, still carrying +/-0.9F.
+        "observed_high_source": observed_high_source,
+        "observed_low_source": observed_low_source,
         "today_max_gap_minutes": today_max_gap_minutes,  # for observation_precision.settlement_band
         "tomorrow_high_f": round(tomorrow_high, 1),
         "tomorrow_high_time": tomorrow_high_time,  # only set when tomorrow_source == "nws_forecast"

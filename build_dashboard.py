@@ -417,7 +417,7 @@ def build_paper_trading_rows(stats_by_key, keys=LEAD_TIME_HINTS, labels=LEAD_TIM
 THIN_VOLUME_THRESHOLD = 5  # contracts traded - below this, last_price is easy to be stale/unreliable
 
 
-def build_kalshi_rows(brackets, our_estimate, estimate_label, settlement_band_f=None):
+def build_kalshi_rows(brackets, our_estimate, estimate_label, observed_source=None):
     """
     HTML rows for one Kalshi bracket market, highlighting whichever bracket
     our own point estimate currently falls into - a quick visual check of
@@ -428,22 +428,22 @@ def build_kalshi_rows(brackets, our_estimate, estimate_label, settlement_band_f=
     driving the highlight is legible next to the market's own pricing - not
     just implied by which row lit up.
 
-    settlement_band_f is passed when the number above is an OBSERVED extreme
-    rather than a forecast, and it changes both lines. An observed extreme
-    comes off a stream that reports whole degrees Celsius, so a value like
-    57.20F is exactly 14.0C and the true reading is anywhere in
-    [56.3, 58.1]F - which straddles three Kalshi brackets. Printing "57.20°F"
-    and lighting exactly one row states a precision the sensor never had, and
-    makes the market look wrong whenever it prices the neighbouring bracket.
-    That is not hypothetical: on 2026-07-29 the 5-minute feed flickered
-    14.0C / 15.0C every few minutes - the signature of a true temperature
-    sitting on the 14.5C boundary - the header read "57.20°F", one row lit on
-    "56° to 57°", and the market held 83% on "58° or above". The market was
-    the one reading the instrument correctly.
+    observed_source distinguishes an OBSERVED extreme's provenance. The
+    5-minute feed reports whole degrees Celsius, so its extremes are
+    1.8F-granular however many decimals the conversion prints - 57.20F is
+    exactly 14.0C, and printing it to hundredths claims a resolution the
+    sensor never had. But the fix for that is upstream, not here: ASOS
+    publishes its own un-quantised extreme in the METAR remarks (see
+    asos_extremes), so once the right field is read the ambiguity mostly
+    evaporates. On 2026-07-29 the feed said 57.20F, spanning three brackets;
+    the station's own 6-hourly minimum said 14.4C = 57.92F, which settles to
+    58 - one bracket, and the one the market was actually priced at.
 
-    So with a band: the header shows the honest range, every bracket the band
-    can actually settle into is marked plausible, and the point estimate's own
-    bracket keeps the stronger highlight.
+    So exactly one bracket is ever highlighted. An earlier version lit every
+    bracket a quantised reading could reach, which was honest about the feed
+    but useless to act on - "it might be any of these three" is not an
+    answer. When only the quantised value is available the header still says
+    so in a caption, but the pick itself stays single.
 
     last_price is the most recent trade, not "percent of people betting" -
     it's the market's implied probability (yes/no contracts settle at $1/$0,
@@ -454,26 +454,17 @@ def build_kalshi_rows(brackets, our_estimate, estimate_label, settlement_band_f=
     if not brackets:
         return '<div class="hint">Market unavailable.</div>'
 
-    plausible = []
-    if settlement_band_f is not None:
-        lo, hi = settlement_band_f
-        plausible = [
-            b for b in brackets
-            if bracket_contains(b, lo) or bracket_contains(b, hi)
-            or (b.get("floor_strike") is not None and lo <= b["floor_strike"] <= hi)
-        ]
-
-    if settlement_band_f is None:
-        head = f'{estimate_label}: <strong>{our_estimate:.2f}°F</strong>'
-        sub = ""
-    else:
+    if observed_source == "asos_remark_1min":
+        head = f'{estimate_label}: <strong>{our_estimate:.1f}°F</strong>'
+        sub = ('<div class="kalshi-band-note">station\'s own 1-minute figure '
+               'from the METAR remarks - not the rounded 5-minute feed</div>')
+    elif observed_source == "observation_stream":
         head = f'{estimate_label}: <strong>{format_reading(our_estimate, unit="°F")}</strong>'
         note = precision_note(our_estimate)
-        extra = (
-            f" - could still settle into any of {len(plausible)} brackets"
-            if len(plausible) > 1 else ""
-        )
-        sub = f'<div class="kalshi-band-note">{note}{extra}</div>' if note else ""
+        sub = f'<div class="kalshi-band-note">{note}</div>' if note else ""
+    else:
+        head = f'{estimate_label}: <strong>{our_estimate:.2f}°F</strong>'
+        sub = ""
 
     rows = [f'<div class="kalshi-estimate">{head}</div>{sub}']
     for b in brackets:
@@ -489,9 +480,7 @@ def build_kalshi_rows(brackets, our_estimate, estimate_label, settlement_band_f=
         thin_flag = ' <span class="kalshi-thin-flag">thin</span>' if is_thin else ""
 
         is_match = bracket_contains(b, our_estimate)
-        match_class = " kalshi-row-match" if is_match else (
-            " kalshi-row-plausible" if b in plausible else ""
-        )
+        match_class = " kalshi-row-match" if is_match else ""
         rows.append(
             f'<div class="kalshi-row{match_class}{thin_class}">'
             f'<span class="kalshi-label">{b["label"]}{thin_flag}</span>'
@@ -979,10 +968,10 @@ def main():
         "kalshi_high_rows": build_kalshi_rows(
             kalshi_high["brackets"], extremes["estimated_high_f"],
             "Observed high" if extremes["high_status"] == "observed" else "Estimated high",
-            # Only an already-observed extreme gets the band: a forecast's
-            # error is its own uncertainty, not the sensor's resolution.
-            settlement_band_f=(
-                settlement_band("high", extremes["estimated_high_f"], today_max_gap_minutes)
+            # Provenance only applies to an already-observed extreme; a
+            # forecast's error is its own, not the sensor's.
+            observed_source=(
+                extremes.get("observed_high_source")
                 if extremes["high_status"] == "observed" else None
             ),
         ) if kalshi_high else (
@@ -999,8 +988,8 @@ def main():
             kalshi_low["brackets"],
             extremes["observed_low_so_far_f"] if extremes["low_status"] == "tonight" else extremes["estimated_low_f"],
             "Observed low" if extremes["low_status"] == "tonight" else "Estimated low",
-            settlement_band_f=(
-                settlement_band("low", extremes["observed_low_so_far_f"], today_max_gap_minutes)
+            observed_source=(
+                extremes.get("observed_low_source")
                 if extremes["low_status"] == "tonight" else None
             ),
         ) if kalshi_low else (
