@@ -50,7 +50,7 @@ from kalshi import (
     bracket_contains,
 )
 from nws_climate import fetch_recent_cli_finals
-from observation_precision import settlement_band
+from observation_precision import settlement_band, extreme_time_window
 from paper_trading import resolve_paper_trade, resolve_unconditional_low_bet, LEAD_TIME_HINTS
 import requests
 
@@ -126,9 +126,15 @@ def _full_day_actuals(station_id, day):
     # continuous curve was invisible to us, which is what sizes the
     # sampling allowance in observation_precision.settlement_band.
     gaps = df["time"].sort_values().diff().dt.total_seconds().dropna() / 60
+    times, temps = list(df["time"]), list(df["temp_f"])
+    high_win = extreme_time_window(times, temps, "high")
+    low_win = extreme_time_window(times, temps, "low")
     return {
         "df": df,
         "max_gap_minutes": float(gaps.max()) if len(gaps) else None,
+        # (start, end, representative) - see observation_precision.
+        "high_time_window": high_win,
+        "low_time_window": low_win,
         "high_temp": float(df.loc[high_idx, "temp_f"]),
         "high_time": df.loc[high_idx, "time"],
         "low_temp": float(df.loc[low_idx, "temp_f"]),
@@ -257,7 +263,14 @@ def _finalize_side(station_id, day, side, actuals, prediction, series_ticker, tz
     source - CLI never publishes a time-of-day for its max/min (see
     nws_climate.py) - only the temperature VALUE prefers CLI."""
     stream_temp = actuals[f"{side}_temp"]
-    actual_time = actuals[f"{side}_time"]
+    # The reported peak time is the plateau's MIDPOINT, not the first
+    # sample that happened to hit the extreme value. Quantised readings
+    # tie constantly, so idxmin/idxmax was picking the left edge of a
+    # window up to ~3h wide - biasing every logged peak time early by
+    # half the plateau. See observation_precision.extreme_time_window.
+    window = actuals.get(f"{side}_time_window") or (None, None, None)
+    window_start, window_end, representative = window
+    actual_time = representative if representative is not None else actuals[f"{side}_time"]
     df = actuals["df"]
 
     cli_temp = cli.get(f"{side}_f") if cli else None
@@ -294,6 +307,25 @@ def _finalize_side(station_id, day, side, actuals, prediction, series_ticker, tz
         "nws_forecast_temp": nws_forecast_temp,
         "nws_forecast_error_f": nws_forecast_error_f,
         "actual_peak_time": actual_time.isoformat(),
+        # The plateau this time sits inside, and how wide it is. A timing
+        # error smaller than the window is not a real miss - the window is
+        # the resolution limit of the measurement, not of the model.
+        "actual_peak_time_window": (
+            [window_start.isoformat(), window_end.isoformat()]
+            if window_start is not None else None
+        ),
+        "actual_peak_time_window_minutes": (
+            round((window_end - window_start).total_seconds() / 60, 1)
+            if window_start is not None else None
+        ),
+        # Tags how actual_peak_time was derived, so rows written before
+        # this change are never silently pooled with rows after it - same
+        # rule as actual_peak_temp_source.
+        "actual_peak_time_method": "plateau_midpoint",
+        "peak_time_within_window": (
+            bool(window_start <= predicted_time <= window_end)
+            if (window_start is not None and predicted_time is not None) else None
+        ),
         "actual_peak_temp": actual_temp,
         "actual_peak_temp_source": actual_temp_source,
         "actual_peak_temp_stream_f": stream_temp,
@@ -497,6 +529,82 @@ def finalize_pending_days(station_id, lookback_days=7):
     return finalized
 
 
+def reconcile_peak_time_windows(station_id, lookback_days=10):
+    """
+    Re-derives actual_peak_time for rows written before the plateau-window
+    change, so the log isn't a mix of two definitions.
+
+    Those rows recorded the FIRST sample at the extreme value; this
+    recomputes the plateau and stores its midpoint, shifting logged peak
+    times later by up to ~100 minutes on days with a wide plateau. Only
+    touches rows still inside the observation-history window - anything
+    older keeps actual_peak_time_method absent, which is exactly the
+    marker that says "left-edge convention, don't pool with the rest".
+
+    Returns the list of (date_str, side, shift_minutes) actually changed.
+    """
+    rows = _load_rows()
+    sample = get_observation_history(station_id, limit=5)
+    tzinfo = sample["time"].iloc[0].tzinfo
+    today_local = datetime.now(tzinfo).date()
+
+    changed = []
+    for row in rows:
+        if row["station"] != station_id.upper():
+            continue
+        day = date.fromisoformat(row["date"])
+        if (today_local - day).days > lookback_days:
+            continue
+        if all((row.get(s) or {}).get("actual_peak_time_method") for s in ("high", "low")):
+            continue
+        try:
+            actuals = _full_day_actuals(station_id, day)
+        except Exception:
+            continue
+        if actuals is None:
+            continue
+        for side in ("high", "low"):
+            side_record = row.get(side)
+            if side_record is None or side_record.get("actual_peak_time_method"):
+                continue
+            # Only trust a recomputed window if today's observation history
+            # still reproduces the extreme this row was built from. For older
+            # dates the API's history thins out - 2026-07-21 now returns 34
+            # observations with the whole pre-dawn stretch missing, so its
+            # "daily low" recomputes as 75.92F at 22:53 instead of 62.60F at
+            # 06:40. Backfilling from that would move a logged peak time by
+            # 16 hours to match data that no longer exists.
+            stored = side_record.get("actual_peak_temp_stream_f")
+            recomputed = actuals.get(f"{side}_temp")
+            if stored is None or recomputed is None or abs(stored - recomputed) > 0.05:
+                continue
+            win = actuals.get(f"{side}_time_window") or (None, None, None)
+            if win[2] is None:
+                continue
+            old = datetime.fromisoformat(side_record["actual_peak_time"])
+            shift = round((win[2] - old).total_seconds() / 60, 1)
+            side_record["actual_peak_time"] = win[2].isoformat()
+            side_record["actual_peak_time_window"] = [win[0].isoformat(), win[1].isoformat()]
+            side_record["actual_peak_time_window_minutes"] = round(
+                (win[1] - win[0]).total_seconds() / 60, 1
+            )
+            side_record["actual_peak_time_method"] = "plateau_midpoint"
+            pt = side_record.get("predicted_peak_time")
+            if pt is not None:
+                p = datetime.fromisoformat(pt)
+                side_record["peak_time_error_minutes"] = round(
+                    (p - win[2]).total_seconds() / 60, 1
+                )
+                side_record["peak_time_within_window"] = bool(win[0] <= p <= win[1])
+            changed.append((row["date"], side, shift))
+
+    if changed:
+        with open(LOG_PATH, "w") as f:
+            for row in rows:
+                f.write(json.dumps(row) + "\n")
+    return changed
+
+
 def reconcile_stream_fallback_actuals(station_id, lookback_days=5):
     """
     Revisits recently-finalized days whose actual_peak_temp_source is
@@ -553,6 +661,18 @@ def reconcile_stream_fallback_actuals(station_id, lookback_days=5):
 
             actuals = _full_day_actuals(station_id, day)
             if actuals is None:
+                continue
+            # Same degraded-history guard as reconcile_peak_time_windows:
+            # re-finalizing rebuilds the whole side from _full_day_actuals,
+            # so if the API no longer returns the observations this row was
+            # derived from, rewriting it would replace good data with a
+            # thinned-out day's artifacts.
+            stored_stream = side_record.get("actual_peak_temp_stream_f")
+            if (
+                stored_stream is not None
+                and actuals.get(f"{side}_temp") is not None
+                and abs(stored_stream - actuals[f"{side}_temp"]) > 0.05
+            ):
                 continue
             if prediction is None:
                 prediction = get_last_prediction(row["date"])

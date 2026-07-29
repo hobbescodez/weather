@@ -33,6 +33,7 @@ from calibration_log import record_snapshot, next_day_confidence_pct, MIN_NEXT_D
 from daily_performance import (
     finalize_pending_days,
     reconcile_stream_fallback_actuals,
+    reconcile_peak_time_windows,
     weekly_table,
     monthly_rollup,
     LOW_SAMPLE_THRESHOLD,
@@ -220,6 +221,20 @@ def _fmt_num(x, digits=1, sign=False):
     return f"{x:+.{digits}f}" if sign else f"{x:.{digits}f}"
 
 
+def _format_time_delta(s):
+    """Timing error, flagged when it lands inside the plateau the extreme
+    actually occupied - the model can't be 'wrong' by less than the
+    measurement's own resolution (see observation_precision)."""
+    err = s.get("peak_time_error_minutes")
+    if err is None:
+        return "—"
+    txt = f"{_fmt_num(err, 0, sign=True)} min"
+    if s.get("peak_time_within_window"):
+        w = s.get("actual_peak_time_window_minutes") or 0
+        return f'<span title="inside the {w:.0f}-minute plateau the extreme occupied">{txt} \u2713</span>'
+    return txt
+
+
 def build_weekly_performance_table(rows, side):
     """One row per trailing day for a single side (high/low), all spec'd
     fields - wrapped in a horizontally-scrolling container by the
@@ -271,7 +286,7 @@ def build_weekly_performance_table(rows, side):
             f"<td>{actual}</td>"
             f"<td>{_fmt_num(s['temp_1hr_before_actual_peak'])}°</td>"
             f"<td>{_fmt_num(s['peak_temp_error_f'], 2, sign=True) if s['peak_temp_error_f'] is not None else '—'}</td>"
-            f"<td>{_fmt_num(s['peak_time_error_minutes'], 0, sign=True) if s['peak_time_error_minutes'] is not None else '—'} min</td>"
+            f"<td>{_format_time_delta(s)}</td>"
             f"<td>{kalshi_vol}</td>"
             f"<td>{kalshi_implied}</td>"
             "</tr>"
@@ -515,6 +530,7 @@ def main():
 
     try:
         reconcile_stream_fallback_actuals(STATION, lookback_days=5)
+        reconcile_peak_time_windows(STATION, lookback_days=10)
     except Exception as e:
         print(f"daily_performance: reconcile_stream_fallback_actuals failed: {e}")
 

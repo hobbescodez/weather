@@ -46,6 +46,8 @@ fitted to five days. Representing the honest interval and refusing to
 decide when the interval spans a boundary is the correction.
 """
 
+from datetime import timedelta
+
 # +/-0.5C, the half-width of a whole-degree-Celsius report.
 QUANTISED_HALF_WIDTH_F = 0.9
 # +/-0.05C, for the :53 METARs that carry tenths.
@@ -67,6 +69,10 @@ SAMPLING_ALLOWANCE_BASE_F = 1.2      # dense sampling, gaps up to DENSE_GAP_MINU
 SAMPLING_ALLOWANCE_PER_MIN_F = 0.035  # widening per extra minute of gap
 DENSE_GAP_MINUTES = 10.0
 DEFAULT_GAP_MINUTES = 60.0  # assume the worst when coverage is unknown
+
+# Brief excursions away from the extreme shouldn't split one physical
+# plateau in two, but a recurrence hours later isn't the same event.
+PLATEAU_BRIDGE_MINUTES = 30.0
 
 _C_EPSILON = 0.02
 
@@ -124,6 +130,82 @@ def settlement_band(side, stream_temp_f, max_gap_minutes=None):
     if side == "low":
         return (stream_temp_f - q - s, stream_temp_f + q)
     return (stream_temp_f - q, stream_temp_f + q + s)
+
+
+def extreme_time_window(times, temps, side):
+    """
+    When the daily extreme plausibly occurred, as a window rather than an
+    instant, plus a representative point inside it.
+
+    Same quantisation problem as the temperature, but worse for timing.
+    Taking idxmin/idxmax picks the FIRST sample achieving the extreme
+    value - an arbitrary tie-break, because the whole-degree-C readings
+    mean many samples report the identical value. Measured over a week of
+    KSEA data, the extreme value recurs across windows of 1-3 hours, and
+    3 of 10 side-days had a contiguous plateau of 35 minutes or more
+    (two of them a full 3 hours). So "the low was at 02:00" was really
+    "the low was somewhere in 02:00-05:10, and we reported the left
+    edge", which is what peak_time_error_minutes has been scored against.
+
+    A sample counts as indistinguishable from the extreme when it sits
+    within that reading's own uncertainty (reading_half_width_f). For a
+    whole-C extreme that admits the neighbouring tenths readings - whose
+    quantisation intervals genuinely overlap it - while excluding the
+    next whole degree C, which is 1.8F away and therefore a different
+    temperature.
+
+    Only the run of tied samples AROUND the extreme counts, not every
+    tied sample in the day. A quantised value often recurs much later for
+    unrelated reasons - on 2026-07-26 the low reading of 60.08F appeared
+    at 05:38 and again at 23:53, and taking the outer span would have
+    produced an 18-hour "window" whose midpoint, 14:45, was the warmest
+    part of the afternoon. Tied samples are therefore clustered, bridging
+    gaps of up to PLATEAU_BRIDGE_MINUTES so that brief excursions away
+    from the extreme don't split one genuine plateau, and only the
+    cluster containing the extreme sample is returned.
+
+    Returns (window_start, window_end, representative). The
+    representative is the window's midpoint: if the true extreme is
+    equally likely anywhere in the window, the midpoint is the point
+    estimate that minimises expected timing error, whereas the left edge
+    is biased early by half the window every single time.
+    """
+    if len(times) == 0:
+        return (None, None, None)
+    temps = list(temps)
+    times = list(times)
+    extreme = min(temps) if side == "low" else max(temps)
+    tol = reading_half_width_f(extreme)
+
+    pairs = sorted(
+        (t for t, v in zip(times, temps) if abs(v - extreme) <= tol)
+    )
+    if not pairs:
+        return (None, None, None)
+
+    # The sample the old idxmin/idxmax would have picked - the anchor whose
+    # cluster we keep.
+    anchor = min(
+        (t for t, v in zip(times, temps) if v == extreme), default=pairs[0]
+    )
+
+    bridge = timedelta(minutes=PLATEAU_BRIDGE_MINUTES)
+    cluster = [pairs[0]]
+    best = None
+    for prev, cur in zip(pairs, pairs[1:]):
+        if cur - prev <= bridge:
+            cluster.append(cur)
+        else:
+            if cluster[0] <= anchor <= cluster[-1]:
+                best = cluster
+            cluster = [cur]
+    if best is None and cluster[0] <= anchor <= cluster[-1]:
+        best = cluster
+    if best is None:
+        best = [anchor]
+
+    start, endt = best[0], best[-1]
+    return (start, endt, start + (endt - start) / 2)
 
 
 def format_reading(temp_f, decimals=1, unit="°F"):
