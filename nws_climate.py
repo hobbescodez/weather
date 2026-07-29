@@ -38,7 +38,7 @@ VALUE.
 """
 
 import re
-from datetime import datetime
+from datetime import datetime, time, timedelta
 
 import requests
 
@@ -118,6 +118,29 @@ def _parse_cli_text(text):
 
 
 _FINALS_CACHE = None
+
+# When the FINAL report for a finished day actually shows up, measured over
+# the API's whole retention window (every product, parsed, lag from the local
+# midnight that ended the covered day):
+#
+#   07-22 +1.5h   07-23 +1.5h   07-24 +1.5h
+#   07-25 +1.5h   07-26 +1.4h   07-27 +1.4h
+#   07-21 +9.4h  <- the one genuinely late first issue
+#
+# So the schedule is tight: normally ~01:25 local, six of the last seven
+# within six minutes of each other. That tightness is what makes "hasn't
+# published yet" a misleading thing to say at 9am - by then it is not the
+# normal wait, it is an outlier, and the two cases should not read the same.
+# GRACE is set past the observed spread but well short of the +9.4h outlier.
+CLI_FINAL_TYPICAL_LAG_HOURS = 1.5
+CLI_FINAL_GRACE_HOURS = 4.0
+
+
+def cli_final_lag_hours(day, now):
+    """Hours since the local midnight that ended `day` - i.e. how long the
+    final report for that day has been possible to publish."""
+    end_of_day = datetime.combine(day, time(0, 0), tzinfo=now.tzinfo) + timedelta(days=1)
+    return (now - end_of_day).total_seconds() / 3600.0
 
 
 def fetch_recent_cli_finals():

@@ -20,7 +20,12 @@ from zoneinfo import ZoneInfo
 from astral import LocationInfo
 from astral.sun import sun
 
-from nws_climate import get_cli_final_actuals_for_date
+from nws_climate import (
+    get_cli_final_actuals_for_date,
+    cli_final_lag_hours,
+    CLI_FINAL_GRACE_HOURS,
+    CLI_FINAL_TYPICAL_LAG_HOURS,
+)
 
 PST = ZoneInfo("America/Los_Angeles")
 UTC = ZoneInfo("UTC")
@@ -1081,6 +1086,16 @@ def estimate_daily_extremes(station_id, obs_limit=8):
     observed_low = today_obs["temp_f"].min()
     observed_high_time = today_obs.loc[today_obs["temp_f"].idxmax(), "time"]
     observed_low_time = today_obs.loc[today_obs["temp_f"].idxmin(), "time"]
+    # Widest gap between today's observations so far. Feeds
+    # observation_precision.settlement_band, whose one-sided sampling
+    # allowance scales with it - a day sampled every 5 minutes hides much
+    # less of a continuous extreme than one sampled hourly. Computed here
+    # because today_obs is already in hand; refetching it downstream would
+    # be a second call for data we have.
+    _gaps = today_obs["time"].sort_values().diff().dropna()
+    today_max_gap_minutes = (
+        float(_gaps.max().total_seconds() / 60.0) if len(_gaps) else None
+    )
 
     yesterday = today - timedelta(days=1)
     yesterday_start = datetime.combine(yesterday, time(0, 0), tzinfo=now.tzinfo)
@@ -1106,6 +1121,7 @@ def estimate_daily_extremes(station_id, obs_limit=8):
     # between midnight and CLI publication, and for any day whose report
     # never lands.
     yesterday_source = "observation_stream"
+    yesterday_cli_lag_hours = cli_final_lag_hours(yesterday, now)
     try:
         cli_yesterday = get_cli_final_actuals_for_date(yesterday)
     except Exception as e:
@@ -1120,6 +1136,7 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         # rounded local hour at best, while the stream gives the actual
         # observation timestamp, and "recorded at" is about when the
         # temperature happened, not what it settled at.
+        yesterday_cli_lag_hours = None
 
     sunrise_today, sunset_today = get_sun_times(lat, lon, today)
     peak_today = sunrise_today + (sunset_today - sunrise_today) * PEAK_HEAT_FRACTION
@@ -1345,6 +1362,7 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         "observed_high_so_far_time": observed_high_time,  # when that actual high was recorded
         "observed_low_so_far_f": round(observed_low, 2),
         "observed_low_so_far_time": observed_low_time,  # when that actual low was recorded
+        "today_max_gap_minutes": today_max_gap_minutes,  # for observation_precision.settlement_band
         "tomorrow_high_f": round(tomorrow_high, 1),
         "tomorrow_high_time": tomorrow_high_time,  # only set when tomorrow_source == "nws_forecast"
         "tomorrow_high_confidence_pct": tomorrow_confidence,
@@ -1362,6 +1380,16 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         # subject to the +/-0.9F band. Callers must not render the two the
         # same way.
         "yesterday_source": yesterday_source,
+        # Hours the final report has been publishable but hasn't appeared.
+        # None once it has. Lets the dashboard distinguish the ordinary
+        # pre-dawn wait from a genuinely overdue report - at 9am those are
+        # very different statements, and a single "hasn't published yet"
+        # reads identically for both.
+        "yesterday_cli_lag_hours": yesterday_cli_lag_hours,
+        "yesterday_cli_overdue": (
+            yesterday_cli_lag_hours is not None
+            and yesterday_cli_lag_hours > CLI_FINAL_GRACE_HOURS
+        ),
     }
 
 

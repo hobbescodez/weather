@@ -30,7 +30,7 @@ from weather_estimator import (
 from kalshi import HIGH_SERIES, LOW_SERIES, get_market_for_date, get_event_hourly_volume, bracket_contains
 from observation_precision import (
     format_reading, precision_note, is_whole_celsius,
-    format_headline_reading, headline_precision_note,
+    format_headline_reading, headline_precision_note, settlement_band,
 )
 from calibration_log import record_snapshot, next_day_confidence_pct, MIN_NEXT_DAY_SAMPLES
 from daily_performance import (
@@ -417,7 +417,7 @@ def build_paper_trading_rows(stats_by_key, keys=LEAD_TIME_HINTS, labels=LEAD_TIM
 THIN_VOLUME_THRESHOLD = 5  # contracts traded - below this, last_price is easy to be stale/unreliable
 
 
-def build_kalshi_rows(brackets, our_estimate, estimate_label):
+def build_kalshi_rows(brackets, our_estimate, estimate_label, settlement_band_f=None):
     """
     HTML rows for one Kalshi bracket market, highlighting whichever bracket
     our own point estimate currently falls into - a quick visual check of
@@ -428,6 +428,23 @@ def build_kalshi_rows(brackets, our_estimate, estimate_label):
     driving the highlight is legible next to the market's own pricing - not
     just implied by which row lit up.
 
+    settlement_band_f is passed when the number above is an OBSERVED extreme
+    rather than a forecast, and it changes both lines. An observed extreme
+    comes off a stream that reports whole degrees Celsius, so a value like
+    57.20F is exactly 14.0C and the true reading is anywhere in
+    [56.3, 58.1]F - which straddles three Kalshi brackets. Printing "57.20°F"
+    and lighting exactly one row states a precision the sensor never had, and
+    makes the market look wrong whenever it prices the neighbouring bracket.
+    That is not hypothetical: on 2026-07-29 the 5-minute feed flickered
+    14.0C / 15.0C every few minutes - the signature of a true temperature
+    sitting on the 14.5C boundary - the header read "57.20°F", one row lit on
+    "56° to 57°", and the market held 83% on "58° or above". The market was
+    the one reading the instrument correctly.
+
+    So with a band: the header shows the honest range, every bracket the band
+    can actually settle into is marked plausible, and the point estimate's own
+    bracket keeps the stronger highlight.
+
     last_price is the most recent trade, not "percent of people betting" -
     it's the market's implied probability (yes/no contracts settle at $1/$0,
     so price ~= probability under normal arbitrage). Bid/ask and volume are
@@ -437,7 +454,28 @@ def build_kalshi_rows(brackets, our_estimate, estimate_label):
     if not brackets:
         return '<div class="hint">Market unavailable.</div>'
 
-    rows = [f'<div class="kalshi-estimate">{estimate_label}: <strong>{our_estimate:.2f}°F</strong></div>']
+    plausible = []
+    if settlement_band_f is not None:
+        lo, hi = settlement_band_f
+        plausible = [
+            b for b in brackets
+            if bracket_contains(b, lo) or bracket_contains(b, hi)
+            or (b.get("floor_strike") is not None and lo <= b["floor_strike"] <= hi)
+        ]
+
+    if settlement_band_f is None:
+        head = f'{estimate_label}: <strong>{our_estimate:.2f}°F</strong>'
+        sub = ""
+    else:
+        head = f'{estimate_label}: <strong>{format_reading(our_estimate, unit="°F")}</strong>'
+        note = precision_note(our_estimate)
+        extra = (
+            f" - could still settle into any of {len(plausible)} brackets"
+            if len(plausible) > 1 else ""
+        )
+        sub = f'<div class="kalshi-band-note">{note}{extra}</div>' if note else ""
+
+    rows = [f'<div class="kalshi-estimate">{head}</div>{sub}']
     for b in brackets:
         pct = round(b["last_price"] * 100) if b["last_price"] is not None else None
         pct_label = f"{pct}%" if pct is not None else "—"
@@ -451,7 +489,9 @@ def build_kalshi_rows(brackets, our_estimate, estimate_label):
         thin_flag = ' <span class="kalshi-thin-flag">thin</span>' if is_thin else ""
 
         is_match = bracket_contains(b, our_estimate)
-        match_class = " kalshi-row-match" if is_match else ""
+        match_class = " kalshi-row-match" if is_match else (
+            " kalshi-row-plausible" if b in plausible else ""
+        )
         rows.append(
             f'<div class="kalshi-row{match_class}{thin_class}">'
             f'<span class="kalshi-label">{b["label"]}{thin_flag}</span>'
@@ -489,11 +529,28 @@ def format_settled_reading(temp_f, source):
     return format_reading(temp_f, unit="")
 
 
-def yesterday_source_note(source):
-    """Which of the two readings above is on screen, in one short line."""
+def yesterday_source_note(source, lag_hours=None, overdue=False):
+    """Which of the two readings above is on screen, in one short line.
+
+    "hasn't published yet" is true whether it's 3am or 3pm, which makes it
+    useless exactly when it matters. The final report normally lands ~1:25am
+    local, six of the last seven within six minutes of each other (see
+    nws_climate.CLI_FINAL_TYPICAL_LAG_HOURS), so a wait of hours past that is
+    an outlier worth naming rather than the same sentence in a different
+    light.
+    """
     if source == "cli_final":
         return "final NWS climate report (CLI) - the value Kalshi settled on"
-    return "from the observation stream; NWS's final report hasn't published yet"
+    if overdue and lag_hours is not None:
+        return (
+            f"from the observation stream - NWS's final report is about "
+            f"{lag_hours:.0f}h overdue (it normally lands ~1:25 am). Unusual, "
+            f"not unheard of; the value can still move when it publishes."
+        )
+    return (
+        "from the observation stream; NWS's final report normally lands "
+        "~1:25 am and isn't out yet"
+    )
 
 
 def trend_significance_note(slope, slope_se):
@@ -730,6 +787,8 @@ def main():
 
     svg = build_sparkline_svg(times, temps, est["target_time"], est["estimated_temp_f"])
 
+    today_max_gap_minutes = extremes.get("today_max_gap_minutes")
+
     lo, hi = est["estimated_range_f"]
     band_width_f = hi - lo
 
@@ -911,11 +970,21 @@ def main():
             extremes["yesterday_low_f"], extremes.get("yesterday_source")
         ),
         "yesterday_low_time": _fmt_time(extremes["yesterday_low_time"]) if extremes["yesterday_low_time"] is not None else "—",
-        "yesterday_source_note": yesterday_source_note(extremes.get("yesterday_source")),
+        "yesterday_source_note": yesterday_source_note(
+            extremes.get("yesterday_source"),
+            extremes.get("yesterday_cli_lag_hours"),
+            extremes.get("yesterday_cli_overdue", False),
+        ),
         "kalshi_high_ticker": kalshi_high["event_ticker"] if kalshi_high else "no open market",
         "kalshi_high_rows": build_kalshi_rows(
             kalshi_high["brackets"], extremes["estimated_high_f"],
             "Observed high" if extremes["high_status"] == "observed" else "Estimated high",
+            # Only an already-observed extreme gets the band: a forecast's
+            # error is its own uncertainty, not the sensor's resolution.
+            settlement_band_f=(
+                settlement_band("high", extremes["estimated_high_f"], today_max_gap_minutes)
+                if extremes["high_status"] == "observed" else None
+            ),
         ) if kalshi_high else (
             '<div class="hint">Temporarily unable to reach Kalshi for today\'s high market - try refreshing shortly.</div>'
             if kalshi_high_error else '<div class="hint">No open market for today\'s high yet.</div>'
@@ -930,6 +999,10 @@ def main():
             kalshi_low["brackets"],
             extremes["observed_low_so_far_f"] if extremes["low_status"] == "tonight" else extremes["estimated_low_f"],
             "Observed low" if extremes["low_status"] == "tonight" else "Estimated low",
+            settlement_band_f=(
+                settlement_band("low", extremes["observed_low_so_far_f"], today_max_gap_minutes)
+                if extremes["low_status"] == "tonight" else None
+            ),
         ) if kalshi_low else (
             '<div class="hint">Temporarily unable to reach Kalshi for today\'s low market - try refreshing shortly.</div>'
             if kalshi_low_error else '<div class="hint">No open market for today\'s low yet.</div>'
