@@ -195,6 +195,7 @@
     min-height: 0;
   }
   .hero-precision:empty { display: none; }
+  .hilo-detail-caption.hero-precision { display: block; margin-top: 2px; font-size: 11px; }
 
   .content {
     position: relative;
@@ -658,10 +659,7 @@
     <div class="hero">
       <div class="hero-condition">{{condition_text}}</div>
       <div class="hero-temp">{{current_temp}}<sup>°F</sup></div>
-      <!-- Empty for a tenths-precision reading; only appears when the
-           station reported a whole degree C and the F value is therefore
-           a range, not a point. -->
-      <div class="hero-precision">{{current_temp_precision_note}}</div>
+
       <div class="hero-hilo">
         <span><span class="hilo-arrow-high">↑</span>{{daily_high}}°</span>
         <span><span class="hilo-arrow-low">↓</span>{{daily_low}}°</span>
@@ -676,7 +674,7 @@
       </div>
 
       <div class="range-row">
-        <span class="range-label">Raw local trend</span>
+        <span class="range-label">Raw local trend {{trend_slope_se}}°/hr</span>
         <span class="range-values">{{trend_per_hr}}°/hr</span>
       </div>
       <div class="range-row" style="margin-top: 6px;">
@@ -725,11 +723,13 @@
           <span class="hilo-detail-arrow hilo-arrow-high">↑</span>
           <span class="hilo-value">{{observed_high}}°</span>
           <span class="hilo-detail-caption">recorded at {{observed_high_time}}</span>
+          <span class="hilo-detail-caption hero-precision">{{observed_high_precision_note}}</span>
         </div>
         <div class="hilo-detail">
           <span class="hilo-detail-arrow hilo-arrow-low">↓</span>
           <span class="hilo-value">{{observed_low}}°</span>
           <span class="hilo-detail-caption">recorded at {{observed_low_time}}</span>
+          <span class="hilo-detail-caption hero-precision">{{observed_low_precision_note}}</span>
         </div>
       </div>
       <div class="module-label" style="margin-top: 16px;">Yesterday</div>

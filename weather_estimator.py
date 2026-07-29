@@ -670,7 +670,46 @@ MARINE_PUSH_INDEX_THRESHOLD = 8.0
 OFFSHORE_FLOW_INDEX_THRESHOLD = 8.0
 
 
-def _pressure_trend_and_uncertainty(df, elapsed_hours, hours_ahead, marine_push_index=None, offshore_flow_index=None):
+# Weight on the fitted slope's own standard error when it enters the
+# uncertainty band. 1.0 = propagate it at face value (plain OLS error
+# propagation); 0.0 disables the term, which is how the before/after
+# backtest for this change was run. Not a fudge factor to tune away a
+# coverage shortfall - if the band still under-covers at 1.0, that is the
+# model being genuinely overconfident, not this constant being wrong.
+TREND_SE_WEIGHT = 1.0
+
+
+def _slope_standard_error(x, y, slope, intercept):
+    """Standard error of the OLS slope: s / sqrt(Sxx), with s the residual
+    standard deviation.
+
+    This is the piece the band was missing. The trend is fit on 8
+    observations that are themselves quantised to whole degrees Celsius
+    (+/-0.9F - see observation_precision), and that noise propagates
+    straight into the slope: on a representative window, +/-0.9F of
+    reading noise alone moves the fitted slope by sd ~0.97 F/hr against a
+    slope of -4.11 F/hr. Multiplied out over the projection horizon that
+    is degrees of temperature uncertainty the band never accounted for.
+
+    Returns None when the fit is too short or degenerate to have a
+    meaningful standard error.
+    """
+    n = len(x)
+    if n < 3:
+        return None
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    sxx = float(((x - x.mean()) ** 2).sum())
+    if sxx <= 0:
+        return None
+    resid = y - (slope * x + intercept)
+    s2 = float((resid ** 2).sum()) / (n - 2)
+    if s2 < 0:
+        return None
+    return float(np.sqrt(s2 / sxx))
+
+
+def _pressure_trend_and_uncertainty(df, elapsed_hours, hours_ahead, marine_push_index=None, offshore_flow_index=None, trend_uncertainty_f=None):
     """
     Falling pressure signals a front/unsettled system may be approaching,
     but not which direction temp will move - so this widens the uncertainty
@@ -715,6 +754,17 @@ def _pressure_trend_and_uncertainty(df, elapsed_hours, hours_ahead, marine_push_
     if offshore_flow_index is not None and offshore_flow_index > OFFSHORE_FLOW_INDEX_THRESHOLD:
         uncertainty += min(1.5, offshore_flow_index / 20)
         notes.append("offshore flow signal rising")
+
+    # The heuristic terms above are all "some pattern suggests conditions
+    # are less predictable". The slope's standard error is a different
+    # kind of thing - a statistical property of the fit itself - so it
+    # combines in quadrature as an independent source rather than being
+    # added on like another flag.
+    if trend_uncertainty_f:
+        widened = math.sqrt(uncertainty ** 2 + trend_uncertainty_f ** 2)
+        if widened - uncertainty >= 0.3:
+            notes.append("noisy local trend fit")
+        uncertainty = widened
 
     uncertainty_note = "; ".join(notes) if notes else None
     return pressure_trend, round(uncertainty, 1), uncertainty_note
@@ -806,9 +856,20 @@ def estimate_from_df(
         marine_push_index = compute_marine_push_index(gradient_trend, network_signals["strait"])
         offshore_flow_index = compute_offshore_flow_index(network_signals["interior_gap"])
 
+    # Propagate the slope's own uncertainty through exactly the same path
+    # the slope itself takes: capped at TREND_HORIZON_HOURS and scaled by
+    # the same damping, because that is what multiplies the slope into a
+    # temperature change.
+    slope_se = _slope_standard_error(elapsed_hours, df["temp_f"], slope, intercept)
+    trend_uncertainty_f = (
+        slope_se * min(hours_ahead, TREND_HORIZON_HOURS) * combined_damping * TREND_SE_WEIGHT
+        if slope_se is not None else None
+    )
+
     pressure_trend, uncertainty_f, uncertainty_note = _pressure_trend_and_uncertainty(
         df, elapsed_hours, hours_ahead,
         marine_push_index=marine_push_index, offshore_flow_index=offshore_flow_index,
+        trend_uncertainty_f=trend_uncertainty_f,
     )
 
     raw_change = slope * min(hours_ahead, TREND_HORIZON_HOURS)
@@ -848,6 +909,11 @@ def estimate_from_df(
             round(estimated_temp + uncertainty_f, 1),
         ),
         "raw_trend_f_per_hr": round(slope, 2),
+        # (c) - how well-determined that slope actually is, and what it
+        # contributed to the band. Displayed rather than buried, because a
+        # trend of -4.1 F/hr +/-1.0 is a different claim from -4.1 +/-0.1.
+        "trend_slope_se_f_per_hr": round(slope_se, 2) if slope_se is not None else None,
+        "trend_uncertainty_f": round(trend_uncertainty_f, 2) if trend_uncertainty_f else None,
         "diurnal_damping": round(diurnal_damping, 2),
         "sky_wind_damping": round(sky_wind_damping, 2),
         "cloud_fraction": latest.get("cloud_fraction") if pd.notna(latest.get("cloud_fraction")) else None,

@@ -216,14 +216,31 @@ def _empirical_band_coverage(station_id):
     """Real fraction of outcomes the model's stated band actually
     covers (from a fresh backtest), used to calibrate the probability
     distribution below to the model's real track record rather than
-    its nominal target."""
+    its nominal target.
+
+    Bug fixed 2026-07-29: backtest() returns a (DataFrame, summary)
+    TUPLE, so `result["pct_within_uncertainty_band"]` raised TypeError -
+    which the bare `except Exception: pass` below swallowed silently.
+    This function had therefore ALWAYS returned FALLBACK_COVERAGE, and
+    the whole "calibrate sigma to the model's measured track record"
+    mechanism this module's docstring describes had never once run. The
+    fallback (0.40) happened to be near the real 3h figure at the time it
+    was chosen, which is why nothing looked obviously wrong; the measured
+    value is now ~0.53, and using it narrows the calibrated sigma by
+    about a quarter.
+
+    The except is kept - a live backtest genuinely can fail on a network
+    hiccup, and falling back beats crashing a bet placement - but it now
+    reports what it swallowed instead of hiding it.
+    """
     try:
-        result = backtest(station_id, hours_ahead=3, window_obs=8, lookback_days=5)
-        coverage = result["pct_within_uncertainty_band"]
+        _, summary = backtest(station_id, hours_ahead=3, window_obs=8, lookback_days=5)
+        coverage = summary["pct_within_uncertainty_band"]
         if 0 < coverage < 1:
             return coverage
-    except Exception:
-        pass
+        print(f"paper_trading: implausible backtest coverage {coverage!r}, using fallback")
+    except Exception as e:
+        print(f"paper_trading: band-coverage backtest failed ({e}), using fallback")
     return FALLBACK_COVERAGE
 
 

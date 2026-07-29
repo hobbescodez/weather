@@ -727,7 +727,6 @@ def main():
         # a whole-degree-C report carrying +/-0.9F, so two decimals were
         # inventing precision the sensor never reported.
         "current_temp": format_reading(temps[-1], unit=""),
-        "current_temp_precision_note": precision_note(temps[-1]) or "",
         "target_time": _fmt_day_time(est["target_time"]),
         "estimated_temp": f"{est['estimated_temp_f']:.2f}",
         "range_low": f"{lo:.2f}",
@@ -735,6 +734,17 @@ def main():
         "band_width": f"{band_width_f:.2f}",
         "hours_ahead": HOURS_AHEAD,
         "trend_per_hr": f"{est['raw_trend_f_per_hr']:+.2f}",
+        # (c) how well-determined that slope is. A trend of -4.1 ±0.2 and one
+        # of -4.1 ±2.8 are very different claims; only one of them was ever
+        # shown before.
+        "trend_slope_se": (
+            f"±{est['trend_slope_se_f_per_hr']:.2f}"
+            if est.get("trend_slope_se_f_per_hr") is not None else "—"
+        ),
+        "trend_uncertainty_contrib": (
+            f"widens the band by {est['trend_uncertainty_f']:.1f}°F"
+            if est.get("trend_uncertainty_f") else "not material at this horizon"
+        ),
         "wind_mph": f"{est['wind_mph']:.2f}" if est["wind_mph"] is not None else "—",
         "cloud_label": cloud_label,
         "cloud_icon_svg": cloud_icon_svg,
@@ -759,8 +769,12 @@ def main():
         "daily_low_caption": LOW_CAPTIONS[extremes["low_status"]],
         "est_trough_time": _fmt_day_time(extremes["estimated_low_time"]),
         "observed_high": format_reading(extremes["observed_high_so_far_f"], unit=""),
+        # The bracket highlight is read against these, not against the hero,
+        # so the "why is this a range" explanation belongs here.
+        "observed_high_precision_note": precision_note(extremes["observed_high_so_far_f"]) or "",
         "observed_high_time": _fmt_time(extremes["observed_high_so_far_time"]),
         "observed_low": format_reading(extremes["observed_low_so_far_f"], unit=""),
+        "observed_low_precision_note": precision_note(extremes["observed_low_so_far_f"]) or "",
         "observed_low_time": _fmt_time(extremes["observed_low_so_far_time"]),
         "tomorrow_high": f"{extremes['tomorrow_high_f']:.2f}",
         "tomorrow_confidence_pct": tomorrow_high_confidence_pct,
