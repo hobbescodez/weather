@@ -47,7 +47,6 @@ decide when the interval spans a boundary is the correction.
 """
 
 from datetime import timedelta
-from decimal import Decimal, ROUND_HALF_UP
 
 # +/-0.5C, the half-width of a whole-degree-Celsius report.
 QUANTISED_HALF_WIDTH_F = 0.9
@@ -227,42 +226,44 @@ def format_reading(temp_f, decimals=1, unit="°F"):
     return f"≈{lo}–{hi}{unit}"
 
 
+HEADLINE_DECIMALS = 2
+
+
 def format_headline_reading(temp_f, unit=""):
-    """A single whole-degree number, for the hero temperature.
+    """A single number for the hero temperature, at HEADLINE_DECIMALS.
 
     Deliberately NOT format_reading's range treatment. The range is right
     for the retrospective high/low, where the exact value decides which
     Kalshi bracket the day landed in and a degree of slack changes the
     answer. For "what is it right now" it's clutter: nobody reads a live
     temperature to settle anything, and a headline that says "~65-67" is
-    harder to take in than one that says 66.
+    harder to take in than one that says 66.20.
 
-    What it does not do is go back to two decimals. 66.20F is exactly
-    19.0C - those decimals are an artefact of the Celsius-to-Fahrenheit
-    conversion, not a measurement. Rounding to the whole degree is the
-    honest resolution; the plain-language note below carries the caveat.
-
-    Half-up rather than Python's banker's rounding, matching
-    kalshi._round_to_settlement_degree, so a .5 case never displays one
-    degree while settling as another.
+    The decimals are a display choice, not a precision claim - 66.20F is
+    exactly 19.0C, so the hundredths come from the Celsius-to-Fahrenheit
+    conversion rather than from the instrument. headline_precision_note
+    carries that caveat underneath. Anything that has to be *correct*
+    about the reading's resolution - bracket matching, settlement,
+    resolving a bet - goes through settlement_band and format_reading,
+    never through this.
     """
     if temp_f is None:
         return "—"
-    whole = int(Decimal(str(temp_f)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-    return f"{whole}{unit}"
+    return f"{temp_f:.{HEADLINE_DECIMALS}f}{unit}"
 
 
 def headline_precision_note(temp_f):
-    """One short line of plain English for under the hero number, or None
-    when the reading genuinely carries more precision than a whole degree.
+    """One short line for under the hero number, or None when the reading
+    genuinely carries more precision than a whole degree Celsius.
 
-    Prose, not notation: "+/-0.9F" next to a big number reads as an error
-    bar on the forecast, which it isn't - it's a statement about what the
-    instrument reports.
+    It matters more here than anywhere else on the page precisely because
+    the headline shows hundredths: without it, two decimals read as two
+    decimals of accuracy, when the underlying report is a whole degree C
+    and the honest slack is nearly two degrees F.
     """
     if temp_f is None or not is_whole_celsius(temp_f):
         return None
-    return "station reports whole-degree readings"
+    return "station reports whole-degree readings (±1°)"
 
 
 def precision_note(temp_f):
