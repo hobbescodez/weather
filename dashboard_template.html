@@ -195,6 +195,17 @@
     min-height: 0;
   }
   .hero-precision:empty { display: none; }
+
+  /* Sits under the big number: present for anyone who reads it, but
+     small and quiet enough that it never competes with the temperature
+     itself - which is what the range treatment was doing here. */
+  .hero-precision-note {
+    font-size: 11.5px;
+    color: var(--text-faint);
+    margin-top: 6px;
+    letter-spacing: 0.01em;
+  }
+  .hero-precision-note:empty { display: none; }
   .hilo-detail-caption.hero-precision { display: block; margin-top: 2px; font-size: 11px; }
 
   .content {
@@ -659,6 +670,9 @@
     <div class="hero">
       <div class="hero-condition">{{condition_text}}</div>
       <div class="hero-temp">{{current_temp}}<sup>°F</sup></div>
+      <!-- Plain language, not notation, and empty (so hidden) whenever the
+           reading genuinely carries tenths. -->
+      <div class="hero-precision-note">{{current_temp_precision_note}}</div>
 
       <div class="hero-hilo">
         <span><span class="hilo-arrow-high">↑</span>{{daily_high}}°</span>

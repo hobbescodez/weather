@@ -28,7 +28,10 @@ from weather_estimator import (
     OFFSHORE_FLOW_INDEX_THRESHOLD,
 )
 from kalshi import HIGH_SERIES, LOW_SERIES, get_market_for_date, get_event_hourly_volume, bracket_contains
-from observation_precision import format_reading, precision_note, is_whole_celsius
+from observation_precision import (
+    format_reading, precision_note, is_whole_celsius,
+    format_headline_reading, headline_precision_note,
+)
 from calibration_log import record_snapshot, next_day_confidence_pct, MIN_NEXT_DAY_SAMPLES
 from daily_performance import (
     finalize_pending_days,
@@ -742,7 +745,12 @@ def main():
         # Rendered at the reading's real resolution: 69.80 is exactly 21.0C,
         # a whole-degree-C report carrying +/-0.9F, so two decimals were
         # inventing precision the sensor never reported.
-        "current_temp": format_reading(temps[-1], unit=""),
+        # Hero stays a single whole number - the range treatment belongs on
+        # the retrospective high/low, where the exact value decides a
+        # bracket. Two decimals would be worse still: 66.20F is exactly
+        # 19.0C, so those digits are a unit-conversion artefact.
+        "current_temp": format_headline_reading(temps[-1]),
+        "current_temp_precision_note": headline_precision_note(temps[-1]) or "",
         "target_time": _fmt_day_time(est["target_time"]),
         "estimated_temp": f"{est['estimated_temp_f']:.2f}",
         "range_low": f"{lo:.2f}",
