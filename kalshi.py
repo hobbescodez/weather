@@ -23,6 +23,8 @@ pip install requests
 import time
 from datetime import datetime, timezone
 
+from decimal import Decimal, ROUND_HALF_UP
+
 import requests
 
 KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
@@ -46,13 +48,46 @@ def get_event_ticker_for_date(series_ticker, for_date):
     return None
 
 
+def _round_to_settlement_degree(value):
+    """Round a continuous temperature to the whole degree Kalshi will
+    settle on, using NWS's convention rather than Python's.
+
+    Python's built-in round() is banker's rounding - ties go to the EVEN
+    integer - so round(60.5) is 60 while round(61.5) is 62. NWS rounds
+    ties away from zero, so 60.5 reports as 61. The disagreement is
+    narrow but not theoretical: every model point estimate is emitted to
+    one decimal place, 2.1% of the ones logged so far land exactly on
+    .5, and three of those (2026-07-23 74.5, 07-24 78.5, 07-25 72.5)
+    would have selected a lower bracket under banker's rounding than the
+    one the settlement value actually lands in.
+
+    Decimal(str(value)) rather than arithmetic on the float: 1-decimal
+    temperatures like 60.4 have no exact binary representation, and
+    going through the decimal repr avoids a tie being missed (or
+    invented) by representation error.
+
+    Ties away from zero, not toward +infinity - they differ only below
+    0F, which Sea-Tac does not reach in practice, but away-from-zero is
+    the meteorological convention and costs nothing to get right.
+    """
+    return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
 def bracket_contains(bracket, value):
     """Whether a temperature value falls inside a bracket's strike range.
-    Kalshi settles on the officially reported whole-degree temperature,
-    while a model estimate is usually a continuous decimal (e.g. 91.40) -
-    rounding first avoids it falling in the crack between adjacent integer
-    brackets like "90 to 91" and "92 to 93", where neither would match."""
-    value = round(value)
+
+    Kalshi settles these markets on the NWS Climatological Report
+    (Daily) for Seattle-Tacoma - CLISEA - which publishes whole degrees,
+    confirmed from the live contract's own rules_primary/rules_secondary
+    text ("...according to the National Weather Service's Climatological
+    Report (Daily)"). It is NOT a floor/truncation of the raw
+    observation and NOT the observation stream's decimal value. So a
+    continuous model estimate (e.g. 91.40) has to be rounded to predict
+    which integer CLI will print, which also avoids it falling in the
+    crack between adjacent integer brackets like "90 to 91" and "92 to
+    93", where neither would match.
+    """
+    value = _round_to_settlement_degree(value)
     floor = bracket["floor_strike"]
     cap = bracket["cap_strike"]
     if floor is not None and cap is not None:
