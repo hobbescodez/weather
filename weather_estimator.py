@@ -1198,15 +1198,47 @@ def estimate_daily_extremes(station_id, obs_limit=8):
     # or the comparison is lost for that day.
     nws_high_forecast_at_target_f = None
     nws_low_forecast_at_target_f = None
+    # NWS's own daily extreme over the rest of the calendar day, which is a
+    # different quantity from its value at our target hour and the one that
+    # actually belongs in the blend.
+    #
+    # Sampling a forecast curve at a fixed hour can only land at or inside
+    # its extremum, never beyond it, so it is biased toward the middle of
+    # the day's range by construction. Measured against CLI actuals over the
+    # logged checkpoints:
+    #
+    #   high  n=98   NWS-at-target minus actual   mean -1.60F, under 71/98
+    #   low   n=33   NWS-at-target minus actual   mean +1.50F, over  26/33
+    #
+    # Both signs are exactly what the geometry predicts - the high sample
+    # reads cold, the low sample reads warm. 2026-07-29 is the visible case:
+    # NWS's hourly curve peaked at 76F at 17:00 and its own daily text said
+    # "high near 76", while our sun-derived peak hour of 16:15 sampled 74F,
+    # and the dashboard showed 74 against a forecast everyone else saw as 76.
+    #
+    # The at-target values stay - they are the like-for-like comparison
+    # record, both models asked about the same moment - but the blend now
+    # uses the extremum, the same way the tomorrow panel always has.
+    nws_high_forecast_daily_f = None
+    nws_low_forecast_daily_f = None
     if high_status == "projected" or low_status == "today":
         try:
             pending_forecast_df = get_hourly_forecast(lat, lon, hours=24)
+            rest_of_today = pending_forecast_df[
+                pending_forecast_df["time"].dt.date == today
+            ]
             if high_status == "projected":
                 v = _nws_forecast_temp_at(pending_forecast_df, high_time)
                 nws_high_forecast_at_target_f = round(float(v), 1) if v is not None else None
+                if not rest_of_today.empty:
+                    nws_high_forecast_daily_f = round(
+                        float(rest_of_today["forecast_temp_f"].max()), 1)
             if low_status == "today":
                 v = _nws_forecast_temp_at(pending_forecast_df, low_time)
                 nws_low_forecast_at_target_f = round(float(v), 1) if v is not None else None
+                if not rest_of_today.empty:
+                    nws_low_forecast_daily_f = round(
+                        float(rest_of_today["forecast_temp_f"].min()), 1)
         except Exception as e:
             # Not a hard failure - both stay None, the blend weight collapses
             # to 0.0 (pure trend, the pre-blend behaviour) and the day simply
@@ -1237,7 +1269,12 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         )
         trend_only_high = max(observed_high, peak_est["estimated_temp_f"])
         blended_high, high_nws_weight = blend_toward_nws(
-            peak_est["estimated_temp_f"], nws_high_forecast_at_target_f,
+            peak_est["estimated_temp_f"],
+            # The daily extremum, not the at-target sample - see above.
+            # Falls back to the at-target value if the day's forecast rows
+            # are missing, which is still better than nothing.
+            nws_high_forecast_daily_f if nws_high_forecast_daily_f is not None
+            else nws_high_forecast_at_target_f,
             peak_today - hour,  # true lead time, not the capped trend horizon
         )
         # The observed-so-far clamp survives the blend: today's high cannot
@@ -1254,7 +1291,10 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         low_est = estimate_from_df(df, hours_to_low, lat, lon)
         trend_only_low = min(observed_low, low_est["estimated_temp_f"])
         blended_low, low_nws_weight = blend_toward_nws(
-            low_est["estimated_temp_f"], nws_low_forecast_at_target_f, hours_to_low
+            low_est["estimated_temp_f"],
+            nws_low_forecast_daily_f if nws_low_forecast_daily_f is not None
+            else nws_low_forecast_at_target_f,
+            hours_to_low,
         )
         estimated_low = min(observed_low, blended_low)
         low_source = _blend_source_label(low_nws_weight, "trend_model")
@@ -1376,12 +1416,14 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         "high_nws_blend_weight": high_nws_weight,  # 0.0 pure trend .. 1.0 pure NWS; None once observed
         "trend_only_high_f": round(trend_only_high, 1) if trend_only_high is not None else None,  # what the un-blended in-house model says, kept for the comparison metrics
         "nws_high_forecast_at_target_f": nws_high_forecast_at_target_f,  # NWS's own forecast for high_time, only while high_status == "projected"
+        "nws_high_forecast_daily_f": nws_high_forecast_daily_f,  # NWS's own daily MAX over the rest of today - what the blend uses
         "estimated_low_f": round(estimated_low, 1),
         "low_status": low_status,
         "low_source": low_source,  # "trend_model", "trend_nws_blend", "nws_forecast", or "dewpoint_fallback"
         "low_nws_blend_weight": low_nws_weight,  # only set while low_status == "today"; the "tonight" branch is already pure NWS
         "trend_only_low_f": round(trend_only_low, 1) if trend_only_low is not None else None,
         "nws_low_forecast_at_target_f": nws_low_forecast_at_target_f,  # NWS's own forecast for low_time, only while low_status == "today"
+        "nws_low_forecast_daily_f": nws_low_forecast_daily_f,  # NWS's own daily MIN over the rest of today - what the blend uses
         "observed_high_so_far_f": round(observed_high, 2),
         "observed_high_so_far_time": observed_high_time,  # when that actual high was recorded
         "observed_low_so_far_f": round(observed_low, 2),

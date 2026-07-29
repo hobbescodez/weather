@@ -911,7 +911,11 @@ def main():
         "daily_high_source_note": blend_source_note(
             extremes.get("high_nws_blend_weight"),
             extremes.get("trend_only_high_f"),
-            extremes.get("nws_high_forecast_at_target_f"),
+            # The daily extremum is what the blend consumed, so it is what
+            # the caption must cite - quoting the at-target sample here would
+            # print a number that doesn't reconcile with the value above it.
+            extremes.get("nws_high_forecast_daily_f")
+            or extremes.get("nws_high_forecast_at_target_f"),
         ),
         "est_peak_time": _fmt_time(extremes["estimated_high_time"]),
         "daily_low": format_reading(extremes["estimated_low_f"], unit=""),
@@ -919,7 +923,8 @@ def main():
         "daily_low_source_note": blend_source_note(
             extremes.get("low_nws_blend_weight"),
             extremes.get("trend_only_low_f"),
-            extremes.get("nws_low_forecast_at_target_f"),
+            extremes.get("nws_low_forecast_daily_f")
+            or extremes.get("nws_low_forecast_at_target_f"),
         ),
         "est_trough_time": _fmt_day_time(extremes["estimated_low_time"]),
         "observed_high": format_reading(extremes["observed_high_so_far_f"], unit=""),

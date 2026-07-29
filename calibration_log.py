@@ -64,6 +64,7 @@ def record_snapshot(extremes, est=None):
         # and how much of the displayed value came from NWS. Without them a
         # backtest after the blend landed would only ever be able to score
         # the blend against itself.
+        "nws_high_forecast_daily_f": extremes.get("nws_high_forecast_daily_f"),
         "trend_only_high_f": extremes.get("trend_only_high_f"),
         "high_nws_blend_weight": extremes.get("high_nws_blend_weight"),
         "observed_high_so_far_f": extremes["observed_high_so_far_f"],
@@ -72,6 +73,7 @@ def record_snapshot(extremes, est=None):
         "estimated_low_f": extremes["estimated_low_f"],
         "estimated_low_time": extremes["estimated_low_time"].isoformat(),
         "nws_low_forecast_at_target_f": extremes.get("nws_low_forecast_at_target_f"),
+        "nws_low_forecast_daily_f": extremes.get("nws_low_forecast_daily_f"),
         "trend_only_low_f": extremes.get("trend_only_low_f"),
         "low_nws_blend_weight": extremes.get("low_nws_blend_weight"),
         "observed_low_so_far_f": extremes["observed_low_so_far_f"],
