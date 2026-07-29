@@ -369,6 +369,16 @@
     margin-top: 6px;
   }
 
+  .hint:empty { display: none; }
+
+  /* Only rendered when the slope's error bar spans zero, so it should read
+     as a caveat on the number above it rather than as more small print. */
+  .trend-insignificant {
+    color: var(--text-soft);
+    font-style: italic;
+    margin-top: 4px;
+  }
+
   .confidence-bar {
     position: relative;
     height: 6px;
@@ -691,6 +701,7 @@
         <span class="range-label">Raw local trend {{trend_slope_se}}°/hr</span>
         <span class="range-values">{{trend_per_hr}}°/hr</span>
       </div>
+      <div class="hint trend-insignificant">{{trend_significance_note}}</div>
       <div class="range-row" style="margin-top: 6px;">
         <span class="range-label">Applied, after damping</span>
         <span class="range-values">{{confidence_pct}}%</span>
@@ -724,11 +735,13 @@
           <span class="hilo-detail-arrow hilo-arrow-high">↑</span>
           <span class="hilo-value">{{daily_high}}°</span>
           <span class="hilo-detail-caption">{{daily_high_caption}} · est. peak ~{{est_peak_time}}</span>
+          <span class="hilo-detail-caption hero-precision">{{daily_high_source_note}}</span>
         </div>
         <div class="hilo-detail">
           <span class="hilo-detail-arrow hilo-arrow-low">↓</span>
           <span class="hilo-value">{{daily_low}}°</span>
           <span class="hilo-detail-caption">{{daily_low_caption}} · est. trough ~{{est_trough_time}}</span>
+          <span class="hilo-detail-caption hero-precision">{{daily_low_source_note}}</span>
         </div>
       </div>
       <div class="module-label" style="margin-top: 16px;">Actual so far today</div>
@@ -759,6 +772,7 @@
           <span class="hilo-detail-caption">recorded at {{yesterday_low_time}}</span>
         </div>
       </div>
+      <div class="hint">{{yesterday_source_note}}</div>
     </div>
 
     <div class="glass">

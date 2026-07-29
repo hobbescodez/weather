@@ -58,12 +58,22 @@ def record_snapshot(extremes, est=None):
         # exact same moment, instead of just "do they agree today" with no
         # record of which one was actually closer.
         "nws_high_forecast_at_target_f": extremes.get("nws_high_forecast_at_target_f"),
+        # estimated_high_f above is now the NWS-blended figure - what's
+        # displayed and what paper_trading bets on. These two keep the
+        # comparison alive: the in-house trend model's own unblended number,
+        # and how much of the displayed value came from NWS. Without them a
+        # backtest after the blend landed would only ever be able to score
+        # the blend against itself.
+        "trend_only_high_f": extremes.get("trend_only_high_f"),
+        "high_nws_blend_weight": extremes.get("high_nws_blend_weight"),
         "observed_high_so_far_f": extremes["observed_high_so_far_f"],
         "observed_high_so_far_time": extremes["observed_high_so_far_time"].isoformat(),
         "low_status": extremes["low_status"],
         "estimated_low_f": extremes["estimated_low_f"],
         "estimated_low_time": extremes["estimated_low_time"].isoformat(),
         "nws_low_forecast_at_target_f": extremes.get("nws_low_forecast_at_target_f"),
+        "trend_only_low_f": extremes.get("trend_only_low_f"),
+        "low_nws_blend_weight": extremes.get("low_nws_blend_weight"),
         "observed_low_so_far_f": extremes["observed_low_so_far_f"],
         "observed_low_so_far_time": extremes["observed_low_so_far_time"].isoformat(),
         "tomorrow_high_f": extremes["tomorrow_high_f"],

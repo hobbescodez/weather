@@ -20,6 +20,8 @@ from zoneinfo import ZoneInfo
 from astral import LocationInfo
 from astral.sun import sun
 
+from nws_climate import get_cli_final_actuals_for_date
+
 PST = ZoneInfo("America/Los_Angeles")
 UTC = ZoneInfo("UTC")
 
@@ -779,6 +781,79 @@ def _pressure_trend_and_uncertainty(df, elapsed_hours, hours_ahead, marine_push_
 # over a 12+ hour projection (e.g. projecting to the next sunrise).
 TREND_HORIZON_HOURS = 6
 
+# How far out today's own extreme estimates hand over from the local trend
+# model to NWS's gridpoint (HRRR) forecast.
+#
+# The trend model and NWS are good at different lead times, and the
+# crossover is sharp. Scored on 106 logged checkpoints (80 high, 26 low)
+# against CLI actuals - each checkpoint's own estimate and NWS's forecast
+# for the same target time, both compared to the same eventual settlement:
+#
+#   high  lead 0-1h   trend MAE  0.38   NWS  2.00
+#         lead 1-2h              1.10        2.00
+#         lead 2-3h              1.28        2.00
+#         lead 3-4h              1.50        2.00
+#         lead 4-5h              1.52        2.00
+#         lead 5-6h              2.84        2.00
+#         lead 6-8h              3.41        2.00
+#         lead 8-12h             7.81        2.11
+#         lead 12-24h           14.50        2.36
+#
+# Close in, the trend model is anchored on observations NWS's grid hasn't
+# ingested and beats it by 5x. Far out it has nothing to work with: at 1am
+# "today's high" degenerates to whatever has been observed since midnight
+# (an overnight low), which is how a 14.5F MAE happens. NWS is flat across
+# the whole range because a gridpoint forecast doesn't care how far away
+# the target is on this scale.
+#
+# So the weight ramps rather than picking a winner: pure trend inside
+# START, pure NWS beyond FULL, linear between. Grid-searched over
+# start in [0, 3] x full in [2, 7]; 3.0/5.0 is the optimum and the surface
+# is flat (+/-0.01F) across start 2.5-3.0, full 4.5-6.0, so these are not
+# fitted to the last decimal. Result, MAE over all logged checkpoints:
+#
+#   high   6.71 -> 1.86   (pure NWS would be 1.85)
+#   low    1.87 -> 1.84   (pure NWS would be 1.86)
+#
+# and critically, 0-3h is untouched - identical to today's numbers. That
+# band is where peak_alerts fires and where paper_trading places its 1hr
+# and 2hr legs, so the ramp fixes the long-lead divergence without
+# perturbing any bet the model actually makes.
+NWS_BLEND_START_HOURS = 3.0
+NWS_BLEND_FULL_HOURS = 5.0
+
+
+def nws_blend_weight(hours_to_target):
+    """How much of today's extreme estimate should come from NWS, given how
+    far away the target time is. 0.0 = pure local trend, 1.0 = pure NWS."""
+    if hours_to_target <= NWS_BLEND_START_HOURS:
+        return 0.0
+    if hours_to_target >= NWS_BLEND_FULL_HOURS:
+        return 1.0
+    span = NWS_BLEND_FULL_HOURS - NWS_BLEND_START_HOURS
+    return (hours_to_target - NWS_BLEND_START_HOURS) / span
+
+
+def blend_toward_nws(trend_value, nws_value, hours_to_target):
+    """Returns (blended_value, weight_actually_applied).
+
+    Weight is 0.0 when there is no NWS value to blend with, so a forecast
+    outage degrades to exactly the old pure-trend behaviour rather than
+    failing.
+    """
+    if nws_value is None:
+        return trend_value, 0.0
+    w = nws_blend_weight(hours_to_target)
+    return (1.0 - w) * trend_value + w * float(nws_value), w
+
+
+def _blend_source_label(weight, trend_label):
+    if weight <= 0.0:
+        return trend_label
+    if weight >= 1.0:
+        return "nws_forecast"
+    return "trend_nws_blend"
+
 
 def estimate_from_df(
     df, hours_ahead, lat, lon,
@@ -1018,13 +1093,100 @@ def estimate_daily_extremes(station_id, obs_limit=8):
     except ValueError:
         yesterday_high = yesterday_low = yesterday_high_time = yesterday_low_time = None
 
+    # Yesterday is a finished day, so it has a right answer rather than an
+    # estimate. Once NWS publishes the final CLI report for it, that whole
+    # degree IS the temperature of record - it's what Kalshi settles on and
+    # what daily_performance scores against - so showing it as a "+/-0.9F
+    # because the station reports whole Celsius" range would be inventing
+    # uncertainty that no longer exists. The quantisation band is the honest
+    # rendering of a stream reading standing in for a settlement value; the
+    # moment the settlement value itself is available, the band is wrong.
+    #
+    # The observation-stream figures stay as the fallback for the window
+    # between midnight and CLI publication, and for any day whose report
+    # never lands.
+    yesterday_source = "observation_stream"
+    try:
+        cli_yesterday = get_cli_final_actuals_for_date(yesterday)
+    except Exception as e:
+        cli_yesterday = None
+        print(f"weather_estimator: CLI lookup for {yesterday} failed ({e}); "
+              "yesterday falls back to the observation stream")
+    if cli_yesterday:
+        yesterday_high = float(cli_yesterday["high_f"])
+        yesterday_low = float(cli_yesterday["low_f"])
+        yesterday_source = "cli_final"
+        # Times are deliberately NOT taken from CLI. The report gives a
+        # rounded local hour at best, while the stream gives the actual
+        # observation timestamp, and "recorded at" is about when the
+        # temperature happened, not what it settled at.
+
     sunrise_today, sunset_today = get_sun_times(lat, lon, today)
     peak_today = sunrise_today + (sunset_today - sunrise_today) * PEAK_HEAT_FRACTION
     hour = now.hour + now.minute / 60
 
     high_time = _hour_to_datetime(today, peak_today, now.tzinfo)
 
-    if hour < peak_today:
+    # Status and target time for both sides are fixed by the clock and the
+    # sun alone, so they're settled before anything is estimated. That
+    # ordering matters: the NWS-at-target capture below needs to know which
+    # extremes are still pending, and the estimates themselves now need that
+    # captured forecast to blend against.
+    high_status = "projected" if hour < peak_today else "observed"
+    if hour < sunrise_today:
+        low_status = "today"  # still before dawn; today's low is imminent
+        low_time = _hour_to_datetime(today, sunrise_today, now.tzinfo)
+    else:
+        low_status = "tonight"  # today's low already happened; forecasting the next one
+        tomorrow_date = today + timedelta(days=1)
+        sunrise_tomorrow, _ = get_sun_times(lat, lon, tomorrow_date)
+        low_time = _hour_to_datetime(tomorrow_date, sunrise_tomorrow, now.tzinfo)
+
+    # NWS's own hourly-forecast value at THIS model's still-pending
+    # extreme's target time (today's peak-heat hour, or dawn if the low
+    # hasn't happened yet).
+    #
+    # Two jobs, both needing the value at exactly this moment. It is the
+    # comparison record - captured at the same checkpoint calibration_log.py
+    # logs this model's own prediction, so the two can be scored against the
+    # same eventual actual later (daily_performance.py's
+    # nws_forecast_error_f). And since NWS_BLEND_START_HOURS it is also an
+    # input: at long lead times today's displayed estimate blends toward it.
+    # NWS's forecastHourly only covers the future, so this cannot be
+    # reconstructed retroactively - it has to be captured live, right here,
+    # or the comparison is lost for that day.
+    nws_high_forecast_at_target_f = None
+    nws_low_forecast_at_target_f = None
+    if high_status == "projected" or low_status == "today":
+        try:
+            pending_forecast_df = get_hourly_forecast(lat, lon, hours=24)
+            if high_status == "projected":
+                v = _nws_forecast_temp_at(pending_forecast_df, high_time)
+                nws_high_forecast_at_target_f = round(float(v), 1) if v is not None else None
+            if low_status == "today":
+                v = _nws_forecast_temp_at(pending_forecast_df, low_time)
+                nws_low_forecast_at_target_f = round(float(v), 1) if v is not None else None
+        except Exception as e:
+            # Not a hard failure - both stay None, the blend weight collapses
+            # to 0.0 (pure trend, the pre-blend behaviour) and the day simply
+            # has no NWS comparison. But it must not be SILENT: this capture
+            # is the only chance to record it, and a quiet failure here loses
+            # that day's model-vs-NWS comparison permanently with nothing in
+            # the logs to say why. Same class of defect as the band-coverage
+            # bug; see calibration_health.
+            print(f"weather_estimator: NWS forecast capture at target time failed ({e}); "
+                  "this day will have no model-vs-NWS comparison and today's "
+                  "estimates fall back to the pure trend model")
+
+    # Both pending sides keep the pure trend value alongside the blended
+    # one. The blend is what gets displayed and bet on; the trend-only
+    # figure is what the backtest and the model-vs-NWS comparison need, and
+    # folding it into the blend would have destroyed the only record of how
+    # the in-house model was doing on its own.
+    trend_only_high = trend_only_low = None
+    high_nws_weight = low_nws_weight = None
+
+    if high_status == "projected":
         horizon = min(peak_today - hour, TREND_HORIZON_HOURS)
         # PEAK_PROJECTION_DAMPING_FLOOR, not the baseline: this call aims
         # at the peak-heat hour itself, the case diurnal_damping_factor
@@ -1032,25 +1194,30 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         peak_est = estimate_from_df(
             df, horizon, lat, lon, damping_floor=PEAK_PROJECTION_DAMPING_FLOOR
         )
-        estimated_high = max(observed_high, peak_est["estimated_temp_f"])
-        high_status = "projected"  # today's peak-heat hour hasn't happened yet
+        trend_only_high = max(observed_high, peak_est["estimated_temp_f"])
+        blended_high, high_nws_weight = blend_toward_nws(
+            peak_est["estimated_temp_f"], nws_high_forecast_at_target_f,
+            peak_today - hour,  # true lead time, not the capped trend horizon
+        )
+        # The observed-so-far clamp survives the blend: today's high cannot
+        # be below a temperature already recorded today, whatever any
+        # forecast says.
+        estimated_high = max(observed_high, blended_high)
+        high_source = _blend_source_label(high_nws_weight, "trend_model")
     else:
         estimated_high = observed_high
-        high_status = "observed"  # today's peak-heat hour has passed
+        high_source = "observed"
 
-    if hour < sunrise_today:
+    if low_status == "today":
         hours_to_low = sunrise_today - hour
         low_est = estimate_from_df(df, hours_to_low, lat, lon)
-        estimated_low = min(observed_low, low_est["estimated_temp_f"])
-        low_status = "today"  # still before dawn; today's low is imminent
-        low_time = _hour_to_datetime(today, sunrise_today, now.tzinfo)
-        low_source = "trend_model"  # imminent (a few hours out at most) - the short-term trend model is fine here
+        trend_only_low = min(observed_low, low_est["estimated_temp_f"])
+        blended_low, low_nws_weight = blend_toward_nws(
+            low_est["estimated_temp_f"], nws_low_forecast_at_target_f, hours_to_low
+        )
+        estimated_low = min(observed_low, blended_low)
+        low_source = _blend_source_label(low_nws_weight, "trend_model")
     else:
-        low_status = "tonight"  # today's low already happened; forecasting the next one
-        tomorrow = today + timedelta(days=1)
-        sunrise_tomorrow, _ = get_sun_times(lat, lon, tomorrow)
-        low_time = _hour_to_datetime(tomorrow, sunrise_tomorrow, now.tzinfo)
-
         # Prefer the actual NWS forecast's temp at the sun-computed low_time
         # (same reasoning as tomorrow's high: real atmospheric dynamics beat
         # a heuristic). Keeping low_time itself sun-derived - not the
@@ -1082,39 +1249,6 @@ def estimate_daily_extremes(station_id, obs_limit=8):
             else:
                 estimated_low = current_temp
             low_source = "dewpoint_fallback"
-
-    # NWS's own hourly-forecast value at THIS model's still-pending
-    # extreme's target time (today's peak-heat hour, or dawn if the low
-    # hasn't happened yet) - captured here, at the same checkpoint
-    # calibration_log.py logs this model's own last pre-peak/pre-dawn
-    # prediction, so the two can be compared against the same eventual
-    # actual later (see daily_performance.py's nws_forecast_error_f).
-    # Only meaningful while that extreme is still pending: once it's
-    # already observed, there's no forecast-vs-actual comparison left to
-    # make for that checkpoint. NWS's forecastHourly only covers the
-    # future, so this can't be reconstructed retroactively - it has to be
-    # captured live, right here, or the comparison is lost for that day.
-    nws_high_forecast_at_target_f = None
-    nws_low_forecast_at_target_f = None
-    if high_status == "projected" or low_status == "today":
-        try:
-            pending_forecast_df = get_hourly_forecast(lat, lon, hours=24)
-            if high_status == "projected":
-                v = _nws_forecast_temp_at(pending_forecast_df, high_time)
-                nws_high_forecast_at_target_f = round(float(v), 1) if v is not None else None
-            if low_status == "today":
-                v = _nws_forecast_temp_at(pending_forecast_df, low_time)
-                nws_low_forecast_at_target_f = round(float(v), 1) if v is not None else None
-        except Exception as e:
-            # Not a hard failure - both stay None and the day simply has no
-            # NWS comparison. But it must not be SILENT: this capture is the
-            # only chance to record it (forecastHourly covers the future
-            # only, so it cannot be reconstructed later), and a quiet failure
-            # here loses that day's model-vs-NWS comparison permanently with
-            # nothing in the logs to say why. Same class of defect as the
-            # band-coverage bug; see calibration_health.
-            print(f"weather_estimator: NWS forecast capture at target time failed ({e}); "
-                  "this day will have no model-vs-NWS comparison")
 
     # Tomorrow's high and low: prefer the actual NWS gridpoint forecast
     # (HRRR-based, real atmospheric dynamics - it can see a heat event
@@ -1197,11 +1331,16 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         "estimated_high_time": high_time,  # theoretical peak-heat hour for today, from sun position - not tied to when the observed high actually occurred
         "estimated_low_time": low_time,  # theoretical sunrise (today's or tomorrow's) - not tied to when the observed low actually occurred
         "high_status": high_status,
+        "high_source": high_source,  # "trend_model", "trend_nws_blend", "nws_forecast", or "observed"
+        "high_nws_blend_weight": high_nws_weight,  # 0.0 pure trend .. 1.0 pure NWS; None once observed
+        "trend_only_high_f": round(trend_only_high, 1) if trend_only_high is not None else None,  # what the un-blended in-house model says, kept for the comparison metrics
         "nws_high_forecast_at_target_f": nws_high_forecast_at_target_f,  # NWS's own forecast for high_time, only while high_status == "projected"
         "estimated_low_f": round(estimated_low, 1),
         "low_status": low_status,
+        "low_source": low_source,  # "trend_model", "trend_nws_blend", "nws_forecast", or "dewpoint_fallback"
+        "low_nws_blend_weight": low_nws_weight,  # only set while low_status == "today"; the "tonight" branch is already pure NWS
+        "trend_only_low_f": round(trend_only_low, 1) if trend_only_low is not None else None,
         "nws_low_forecast_at_target_f": nws_low_forecast_at_target_f,  # NWS's own forecast for low_time, only while low_status == "today"
-        "low_source": low_source,  # "trend_model", "nws_forecast", or "dewpoint_fallback"
         "observed_high_so_far_f": round(observed_high, 2),
         "observed_high_so_far_time": observed_high_time,  # when that actual high was recorded
         "observed_low_so_far_f": round(observed_low, 2),
@@ -1218,6 +1357,11 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         "yesterday_high_time": yesterday_high_time,
         "yesterday_low_f": round(yesterday_low, 2) if yesterday_low is not None else None,
         "yesterday_low_time": yesterday_low_time,
+        # "cli_final" = NWS's published settlement value, exact to the whole
+        # degree; "observation_stream" = our own quantised reading, still
+        # subject to the +/-0.9F band. Callers must not render the two the
+        # same way.
+        "yesterday_source": yesterday_source,
     }
 
 

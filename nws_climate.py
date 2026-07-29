@@ -117,6 +117,9 @@ def _parse_cli_text(text):
     return {"covers_date": covers_date, "is_final": is_final, "high_f": high_f, "low_f": low_f}
 
 
+_FINALS_CACHE = None
+
+
 def fetch_recent_cli_finals():
     """
     Fetches the whole currently-retained window of CLI reports in one
@@ -131,7 +134,21 @@ def fetch_recent_cli_finals():
     same handful of reports. Returns {} (not raising) on any fetch
     failure - CLI is a fallback-augmented source everywhere it's used,
     never a hard dependency.
+
+    Memoised for the life of the process. A single build_dashboard run now
+    asks for this from three places (daily_performance's reconcilers,
+    calibration_health, and weather_estimator's "yesterday"), each of which
+    would otherwise re-fetch and re-parse the same dozen-odd products over
+    HTTP. Published CLI reports don't change within one run, so there is
+    nothing to gain by re-reading them. Only successful non-empty results
+    are cached: an empty result can mean a transient fetch failure, and
+    pinning that for the rest of the run would turn one bad request into a
+    whole refresh with no settlement data.
     """
+    global _FINALS_CACHE
+    if _FINALS_CACHE is not None:
+        return _FINALS_CACHE
+
     try:
         product_ids = _fetch_recent_product_ids()
     except Exception:
@@ -151,6 +168,8 @@ def fetch_recent_cli_finals():
             "low_f": parsed["low_f"],
             "product_id": product_id,
         }
+    if by_date:
+        _FINALS_CACHE = by_date
     return by_date
 
 

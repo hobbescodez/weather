@@ -468,6 +468,51 @@ HIGH_CAPTIONS = {
     "observed": "today's high so far",
     "projected": "projected for today's peak-heat hour",
 }
+
+
+def format_settled_reading(temp_f, source):
+    """A finished day's extreme, rendered according to whether it is
+    actually finished.
+
+    format_reading's "~60-62" range is the honest rendering of a live
+    observation-stream value: 60.80F is a quantised 16.0C standing in for a
+    settlement number that hasn't been published, so the +/-0.9F is real.
+    But once the CLI report lands, the settlement number IS published -
+    it's the integer Kalshi pays out on and daily_performance scores
+    against - and dressing it back up as a range would be reporting
+    uncertainty that has already been resolved.
+    """
+    if temp_f is None:
+        return "—"
+    if source == "cli_final":
+        return f"{temp_f:.0f}"
+    return format_reading(temp_f, unit="")
+
+
+def yesterday_source_note(source):
+    """Which of the two readings above is on screen, in one short line."""
+    if source == "cli_final":
+        return "final NWS climate report (CLI) - the value Kalshi settled on"
+    return "from the observation stream; NWS's final report hasn't published yet"
+
+
+def trend_significance_note(slope, slope_se):
+    """A note for when the raw local trend is indistinguishable from no
+    trend at all.
+
+    "+1.42°/hr ± 2.20°/hr" is not a warming trend - the error bar spans
+    zero, so the sign isn't even established, and the last few observations
+    are consistent with the temperature going nowhere. Shown on its own the
+    +1.42 reads as a claim the fit does not support, and it looked like a
+    bug when it was the model correctly reporting a noisy window. The
+    downstream damping already discounts this (that's what the confidence %
+    is doing), so this is a display gap rather than a modelling one.
+    """
+    if slope is None or slope_se is None or slope_se <= 0:
+        return ""
+    if abs(slope) > slope_se:
+        return ""
+    return "not statistically significant right now - the error bar spans zero, so treat this as flat"
 TOMORROW_SOURCE_BLURB = {
     "nws_forecast": "From the NWS hourly forecast (HRRR model) - real atmospheric dynamics, not this tool's own trend/persistence guess.",
     "persistence_fallback": "NWS forecast unavailable - falling back to a persistence guess (today's/yesterday's high, nudged by pressure trend).",
@@ -501,6 +546,30 @@ LOW_CAPTIONS = {
     "today": "today's overnight low, almost here",
     "tonight": "expected low tonight",
 }
+
+
+def blend_source_note(weight, trend_only_f, nws_f):
+    """Where today's still-pending estimate is actually coming from.
+
+    The mix moves through the day (see weather_estimator's
+    NWS_BLEND_START_HOURS), so a static "trend model" label would be wrong
+    most of the time. Showing both inputs alongside the weight also keeps
+    the comparison the blend was going to hide: the in-house model's own
+    number is still on screen even when it isn't the one being used.
+    """
+    if weight is None:
+        return ""
+    parts = []
+    if trend_only_f is not None:
+        parts.append(f"local trend {trend_only_f:.1f}°")
+    if nws_f is not None:
+        parts.append(f"NWS {nws_f:.1f}°")
+    detail = f" ({' · '.join(parts)})" if parts else ""
+    if weight <= 0:
+        return f"local trend model only - close enough in that it beats NWS here{detail}"
+    if weight >= 1:
+        return f"NWS hourly forecast - too far out for the local trend to be worth anything{detail}"
+    return f"{round((1 - weight) * 100)}% local trend / {round(weight * 100)}% NWS forecast{detail}"
 
 
 def sky_condition(cloud_fraction, is_day):
@@ -769,6 +838,9 @@ def main():
             f"widens the band by {est['trend_uncertainty_f']:.1f}°F"
             if est.get("trend_uncertainty_f") else "not material at this horizon"
         ),
+        "trend_significance_note": trend_significance_note(
+            est.get("raw_trend_f_per_hr"), est.get("trend_slope_se_f_per_hr")
+        ),
         "wind_mph": f"{est['wind_mph']:.2f}" if est["wind_mph"] is not None else "—",
         "cloud_label": cloud_label,
         "cloud_icon_svg": cloud_icon_svg,
@@ -788,9 +860,19 @@ def main():
         "data_json": json.dumps(est, default=str, indent=2),
         "daily_high": format_reading(extremes["estimated_high_f"], unit=""),
         "daily_high_caption": HIGH_CAPTIONS[extremes["high_status"]],
+        "daily_high_source_note": blend_source_note(
+            extremes.get("high_nws_blend_weight"),
+            extremes.get("trend_only_high_f"),
+            extremes.get("nws_high_forecast_at_target_f"),
+        ),
         "est_peak_time": _fmt_time(extremes["estimated_high_time"]),
         "daily_low": format_reading(extremes["estimated_low_f"], unit=""),
         "daily_low_caption": LOW_CAPTIONS[extremes["low_status"]],
+        "daily_low_source_note": blend_source_note(
+            extremes.get("low_nws_blend_weight"),
+            extremes.get("trend_only_low_f"),
+            extremes.get("nws_low_forecast_at_target_f"),
+        ),
         "est_trough_time": _fmt_day_time(extremes["estimated_low_time"]),
         "observed_high": format_reading(extremes["observed_high_so_far_f"], unit=""),
         # The bracket highlight is read against these, not against the hero,
@@ -816,10 +898,20 @@ def main():
             else f"reference confidence {tomorrow_low_confidence_pct}%*"
         ),
         "tomorrow_low_hint": tomorrow_hint(extremes["tomorrow_low_source"], measured_conf["low"], measured_conf["n_low"]),
-        "yesterday_high": format_reading(extremes["yesterday_high_f"], unit=""),
+        # Yesterday is settled, not estimated. Once its CLI report is out,
+        # that whole degree is the value of record - render it plainly, with
+        # no quantisation range and no +/-0.9F caption, because there is no
+        # longer anything uncertain to describe. Only the pre-CLI window
+        # still gets the stream treatment.
+        "yesterday_high": format_settled_reading(
+            extremes["yesterday_high_f"], extremes.get("yesterday_source")
+        ),
         "yesterday_high_time": _fmt_time(extremes["yesterday_high_time"]) if extremes["yesterday_high_time"] is not None else "—",
-        "yesterday_low": format_reading(extremes["yesterday_low_f"], unit=""),
+        "yesterday_low": format_settled_reading(
+            extremes["yesterday_low_f"], extremes.get("yesterday_source")
+        ),
         "yesterday_low_time": _fmt_time(extremes["yesterday_low_time"]) if extremes["yesterday_low_time"] is not None else "—",
+        "yesterday_source_note": yesterday_source_note(extremes.get("yesterday_source")),
         "kalshi_high_ticker": kalshi_high["event_ticker"] if kalshi_high else "no open market",
         "kalshi_high_rows": build_kalshi_rows(
             kalshi_high["brackets"], extremes["estimated_high_f"],
