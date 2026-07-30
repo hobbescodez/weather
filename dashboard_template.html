@@ -626,6 +626,9 @@
     white-space: nowrap;
   }
   .perf-table tr:first-child td { border-top: none; }
+  .perf-err-good { color: var(--text-strong); }
+  .perf-err-bad { color: var(--accent-warm-soft); font-weight: 600; }
+  .perf-pending { color: var(--text-faint); font-style: italic; }
   .perf-subtle { color: var(--text-faint); font-size: 10px; }
   .perf-nodata { color: var(--text-faint); font-style: italic; }
   .perf-flag { cursor: help; }
@@ -888,6 +891,11 @@
     </details>
 
     <details class="glass wide">
+      <summary class="module-label">Next-day forecast · track record</summary>
+      <div class="perf-scroll">{{next_day_table}}</div>
+    </details>
+
+    <details class="glass" open>
       <summary class="module-label">Weekly performance · high ({{weekly_days_with_data}} of {{weekly_days_requested}} days)</summary>
       <div class="perf-scroll">{{weekly_high_table}}</div>
       <div class="hint">Trailing 7 days, most recent first. Predictions only appear once calibration_log.py has logged them (recent addition) - actual/Kalshi columns work back further.</div>

@@ -32,7 +32,7 @@ from observation_precision import (
     format_reading, precision_note, is_whole_celsius,
     format_headline_reading, headline_precision_note, settlement_band,
 )
-from calibration_log import record_snapshot, next_day_confidence_pct, MIN_NEXT_DAY_SAMPLES
+from calibration_log import record_snapshot, next_day_confidence_pct, summarize, MIN_NEXT_DAY_SAMPLES
 from daily_performance import (
     finalize_pending_days,
     reconcile_stream_fallback_actuals,
@@ -594,6 +594,76 @@ LOW_CAPTIONS = {
 }
 
 
+def build_next_day_table(summary, days=8):
+    """
+    How the *next-day* forecast has actually done - the panel that was
+    missing. calibration_log has logged tomorrow_high_f/tomorrow_low_f on
+    every refresh since the beginning, and summarize() has been scoring
+    them against the following day's settled extreme, but none of it was
+    ever rendered, so the only next-day number on the page was a
+    confidence % with nothing behind it you could check.
+
+    Rows the summary marks as unscored (error None) are still listed, with
+    the error blank - that is the in-progress day, and showing it as a row
+    with no verdict is more honest than hiding the prediction until it can
+    be graded.
+    """
+    scored = [
+        d for d in summary["days"]
+        if d["next_day_high"]["projection"] is not None
+        or d["next_day_low"]["projection"] is not None
+    ][-days:]
+    if not scored:
+        return '<div class="hint">No next-day forecasts logged yet.</div>'
+
+    def cell(v, fmt="{:.1f}"):
+        return fmt.format(v) if isinstance(v, (int, float)) else "—"
+
+    def err_cell(v):
+        if not isinstance(v, (int, float)):
+            return '<span class="perf-pending">pending</span>'
+        cls = "perf-err-good" if abs(v) <= 1.5 else "perf-err-bad"
+        return f'<span class="{cls}">{v:+.1f}</span>'
+
+    rows = [
+        "<table class='perf-table'><thead><tr>"
+        "<th>Forecast for</th><th>High est.</th><th>Actual</th><th>Err</th>"
+        "<th>Low est.</th><th>Actual</th><th>Err</th></tr></thead><tbody>"
+    ]
+    for d in reversed(scored):
+        nh, nl = d["next_day_high"], d["next_day_low"]
+        # The newest row has no following date logged yet - its target is
+        # simply the day after it. Deriving it beats printing a dash on the
+        # one row a reader is most likely to be looking for.
+        target = nh.get("target_date")
+        if not target:
+            target = (date.fromisoformat(d["date"]) + timedelta(days=1)).isoformat()
+        rows.append(
+            f"<tr><td>{target[5:]}</td>"
+            f"<td>{cell(nh['projection'])}</td><td>{cell(nh['final'])}</td><td>{err_cell(nh['error'])}</td>"
+            f"<td>{cell(nl['projection'])}</td><td>{cell(nl['final'])}</td><td>{err_cell(nl['error'])}</td></tr>"
+        )
+    rows.append("</tbody></table>")
+
+    def stat_line(label, st):
+        if not st or not st.get("n"):
+            return f"{label}: not enough scored days yet"
+        return (f"{label}: MAE {st['mae_f']:.2f}°F, bias {st['bias_f']:+.2f}°F "
+                f"over {st['n']} day{'s' if st['n'] != 1 else ''}")
+
+    rows.append(
+        '<div class="hint">'
+        + stat_line("High", summary.get("next_day_high_stats"))
+        + " · " + stat_line("Low", summary.get("next_day_low_stats"))
+        + ". Bias is signed forecast minus actual, so positive means the "
+        "forecast ran warm. Days still in progress show <em>pending</em> - "
+        "they are excluded from the averages, because scoring against a "
+        "partial day\'s high is what made these numbers look twice as bad "
+        "as they are.</div>"
+    )
+    return "\n".join(rows)
+
+
 def blend_source_note(weight, trend_only_f, nws_f):
     """Where today's still-pending estimate is actually coming from.
 
@@ -1025,6 +1095,7 @@ def main():
         "tomorrow_low_volume_svg": build_volume_bars_svg(tomorrow_low_volume["hourly"], now.tzinfo) if tomorrow_low_volume else '<div class="hint">Volume unavailable.</div>',
         "weekly_days_with_data": weekly_perf["days_with_data"],
         "weekly_days_requested": weekly_perf["days_requested"],
+        "next_day_table": build_next_day_table(summarize()),
         "weekly_high_table": build_weekly_performance_table(weekly_perf["rows"], "high"),
         "weekly_low_table": build_weekly_performance_table(weekly_perf["rows"], "low"),
         "monthly_label": now.strftime("%B %Y"),

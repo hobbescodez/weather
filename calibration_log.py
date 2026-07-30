@@ -17,6 +17,7 @@ print a summary of what's accumulated so far:
 
 import json
 import os
+from datetime import datetime
 
 LOG_PATH = os.path.join(os.path.dirname(__file__), "calibration_log.jsonl")
 
@@ -171,6 +172,29 @@ def summarize():
     tracks. Works fine with very few days logged - it's meant to grow.
     """
     rows = _load_rows()
+
+    # A date's "final" high/low here is max/min of observed_high_so_far_f
+    # across that date's rows - which is only the day's actual extreme once
+    # the day is OVER. For the day still in progress it is whatever has
+    # happened so far, and scoring against it produces nonsense: at 00:37 on
+    # 2026-07-30 the partial high read 60.8F, making the previous day's
+    # next-day forecast of 76 look like a +15.2F miss when the day had
+    # barely started. That one bogus row moved next_day_high MAE from 1.54
+    # to 3.06 - it more than doubled the headline error.
+    #
+    # So every date is tagged complete/incomplete, and an error is only
+    # computed when the date being scored against is complete. Local
+    # "today" comes from the log's own timestamps rather than a fresh
+    # import, keeping this module free of a weather_estimator dependency.
+    today_local = None
+    if rows:
+        try:
+            tzinfo = datetime.fromisoformat(rows[-1]["logged_at"]).tzinfo
+            today_local = datetime.now(tzinfo).date().isoformat()
+        except Exception as e:
+            print(f"calibration_log: could not derive local today ({e}); "
+                  "in-progress days will be scored as if complete")
+
     by_date = {}
     for r in rows:
         by_date.setdefault(r["date"], []).append(r)
@@ -215,20 +239,31 @@ def summarize():
         tomorrow_high_source = day_rows[-1].get("tomorrow_high_source")
         tomorrow_low_source = day_rows[-1].get("tomorrow_low_source")
 
-        def err(pred, actual):
-            return round(pred - actual, 2) if pred is not None and actual is not None else None
+        def err(pred, actual, scored_date):
+            if pred is None or actual is None:
+                return None
+            if today_local is not None and scored_date >= today_local:
+                return None  # that day isn't over; its "final" is partial
+            return round(pred - actual, 2)
+
+        next_date = dates[i + 1] if i + 1 < len(dates) else None
 
         days.append({
             "date": date,
+            "complete": today_local is None or date < today_local,
             "same_day_high": {"projection": last_high_projection, "final": final_high,
-                               "error": err(last_high_projection, final_high)},
+                               "error": err(last_high_projection, final_high, date)},
             "same_day_low": {"projection": last_low_projection, "final": final_low,
-                              "error": err(last_low_projection, final_low)},
+                              "error": err(last_low_projection, final_low, date)},
+            # Scored against the FOLLOWING date, so completeness is that
+            # date's, not this one's.
             "next_day_high": {"projection": tomorrow_high_forecast, "final": next_final_high,
-                               "error": err(tomorrow_high_forecast, next_final_high),
+                               "error": err(tomorrow_high_forecast, next_final_high, next_date or date),
+                               "target_date": next_date,
                                "source": tomorrow_high_source},
             "next_day_low": {"projection": tomorrow_low_forecast, "final": next_final_low,
-                              "error": err(tomorrow_low_forecast, next_final_low),
+                              "error": err(tomorrow_low_forecast, next_final_low, next_date or date),
+                              "target_date": next_date,
                               "source": tomorrow_low_source},
         })
 
