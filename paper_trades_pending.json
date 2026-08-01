@@ -164,5 +164,63 @@
         ]
       }
     }
+  },
+  "2026-08-01": {
+    "high": {
+      "1hr": {
+        "trigger_type": "edge",
+        "lead_time_hint": "1hr",
+        "simulated_bucket_chosen": "70\u00b0 to 71\u00b0",
+        "simulated_bucket_floor": 70,
+        "simulated_bucket_cap": 71,
+        "simulated_bucket_is_tail": false,
+        "simulated_entry_price": 0.03,
+        "simulated_stake": 0.5,
+        "point_estimate_f": 71.6,
+        "model_implied_probability": 0.1837,
+        "model_credible_probability": 0.1837,
+        "market_implied_probability": 0.03,
+        "edge_at_entry": 0.1537,
+        "edge_at_entry_uncapped": 0.1537,
+        "credible_sigma_span": 1.5,
+        "lead_time_direction_check": null,
+        "estimated_range_low_f": 70.4,
+        "estimated_range_high_f": 72.8,
+        "hours_ahead_at_entry": 0.82,
+        "placed_at": "2026-08-01T15:25:00-07:00",
+        "all_buckets": [
+          {
+            "label": "67\u00b0 or below",
+            "floor_strike": null,
+            "cap_strike": 68
+          },
+          {
+            "label": "68\u00b0 to 69\u00b0",
+            "floor_strike": 68,
+            "cap_strike": 69
+          },
+          {
+            "label": "70\u00b0 to 71\u00b0",
+            "floor_strike": 70,
+            "cap_strike": 71
+          },
+          {
+            "label": "72\u00b0 to 73\u00b0",
+            "floor_strike": 72,
+            "cap_strike": 73
+          },
+          {
+            "label": "74\u00b0 to 75\u00b0",
+            "floor_strike": 74,
+            "cap_strike": 75
+          },
+          {
+            "label": "76\u00b0 or above",
+            "floor_strike": 75,
+            "cap_strike": null
+          }
+        ]
+      }
+    }
   }
 }
