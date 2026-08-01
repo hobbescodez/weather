@@ -976,7 +976,13 @@ def main():
         "sparkline_svg": svg,
         "sparkline_hours": SPARKLINE_HOURS,
         "data_json": json.dumps(est, default=str, indent=2),
-        "daily_high": format_reading(extremes["estimated_high_f"], unit=""),
+        # A model estimate is not a station reading, so format_reading's
+        # quantisation range never applied here - it only ever fired when an
+        # estimate happened to land on a whole degree Celsius, which made an
+        # 83.00 estimate print as "83.0" and a 59.00 one as "≈58-60" for no
+        # reason but arithmetic coincidence. The estimate's real uncertainty
+        # is the uncertainty band, shown separately.
+        "daily_high": format_headline_reading(extremes["estimated_high_f"]),
         "daily_high_caption": HIGH_CAPTIONS[extremes["high_status"]],
         "daily_high_source_note": blend_source_note(
             extremes.get("high_nws_blend_weight"),
@@ -988,7 +994,7 @@ def main():
             or extremes.get("nws_high_forecast_at_target_f"),
         ),
         "est_peak_time": _fmt_time(extremes["estimated_high_time"]),
-        "daily_low": format_reading(extremes["estimated_low_f"], unit=""),
+        "daily_low": format_headline_reading(extremes["estimated_low_f"]),
         "daily_low_caption": LOW_CAPTIONS[extremes["low_status"]],
         "daily_low_source_note": blend_source_note(
             extremes.get("low_nws_blend_weight"),
@@ -997,12 +1003,25 @@ def main():
             or extremes.get("nws_low_forecast_at_target_f"),
         ),
         "est_trough_time": _fmt_day_time(extremes["estimated_low_time"]),
-        "observed_high": format_reading(extremes["observed_high_so_far_f"], unit=""),
+        # One number, not a range. The +/-0.9F of whole-degree-Celsius slack
+        # is real and still stated - it moves to the note underneath, exactly
+        # as the hero already does it. A range here forced the reader to pick
+        # between three answers on the one line that should just say what the
+        # station recorded; the midpoint is the value that minimises expected
+        # error, so it is the one to show.
+        #
+        # This is display only. Everything that has to be *correct* about the
+        # reading's resolution still goes through the precise path:
+        # settlement_band gates whether a bet may be resolved, and the Kalshi
+        # bracket highlight reads observed_*_source, which is
+        # "asos_remark_1min" only when the station's own un-quantised 1-minute
+        # extreme is available (see asos_extremes).
+        "observed_high": format_headline_reading(extremes["observed_high_so_far_f"]),
         # The bracket highlight is read against these, not against the hero,
         # so the "why is this a range" explanation belongs here.
         "observed_high_precision_note": precision_note(extremes["observed_high_so_far_f"]) or "",
         "observed_high_time": _fmt_time(extremes["observed_high_so_far_time"]),
-        "observed_low": format_reading(extremes["observed_low_so_far_f"], unit=""),
+        "observed_low": format_headline_reading(extremes["observed_low_so_far_f"]),
         "observed_low_precision_note": precision_note(extremes["observed_low_so_far_f"]) or "",
         "observed_low_time": _fmt_time(extremes["observed_low_so_far_time"]),
         "tomorrow_high": f"{extremes['tomorrow_high_f']:.2f}",
