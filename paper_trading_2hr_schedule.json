@@ -160,5 +160,13 @@
       "locked_at": "2026-08-02T00:10:00-07:00",
       "skipped_missed_window": false
     }
+  },
+  "2026-08-03": {
+    "low": {
+      "predicted_peak_time_at_lock": "2026-08-03T05:50:00-07:00",
+      "target_time": "2026-08-03T03:50:00-07:00",
+      "locked_at": "2026-08-02T06:05:00-07:00",
+      "skipped_missed_window": false
+    }
   }
 }
