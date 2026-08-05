@@ -21,6 +21,11 @@ from astral import LocationInfo
 from astral.sun import sun
 
 from asos_extremes import collect_remark_extremes, refine_extreme
+from observation_precision import (
+    is_whole_celsius,
+    QUANTISED_HALF_WIDTH_F,
+    TENTHS_HALF_WIDTH_F,
+)
 from nws_climate import (
     get_cli_final_actuals_for_date,
     cli_final_lag_hours,
@@ -567,21 +572,62 @@ DIURNAL_DAMPING_RAMP_HOURS = 6.0
 # curve flattening as it approaches the top. Those want different
 # numbers, and conflating them is what produced the compression.
 #
-# 0.70 is the mean-MAE minimum of a 0.35-1.00 sweep by
-# backtest_peak_projection over 6 days. Bias and MAE both improve at
-# every lead time tested; past ~0.8 bias keeps shrinking but MAE at 4h
-# climbs sharply, so this is not simply "as high as possible".
+# Raised 0.70 -> 1.00 on 2026-08-04. The earlier 0.70 was the mean-MAE
+# minimum of a sweep run at the then-current 8-observation fit window; at
+# the 48-observation window (see PEAK_TREND_WINDOW_OBS) the optimum moves
+# to the top of the range and stays there. Over the 6 days with both full
+# observation coverage and a published CLI actual, averaged across leads
+# of 1/2/3/4/6 hours:
 #
-# What it does NOT fix: compression at 6h+ lead, which stays near -6F at
-# 6h and -11.5F at 8h at any floor, and barely moves when
-# TREND_HORIZON_HOURS goes from 6 to 12. Six-plus hours before the peak
-# it is still early morning and the local trend carries no information
-# about the afternoon high. That is a real limit of a local-trend model,
-# not a mistuned constant. Closing it means leaning harder on the NWS
-# blend at long lead, which cannot be backtested here (no historical
-# forecasts - see estimate_from_df) and so has not been changed on a
-# guess.
-PEAK_PROJECTION_DAMPING_FLOOR = 0.70
+#     floor 0.70   MAE 3.13   bias -2.92     (at obs window 24)
+#     floor 0.85   MAE 2.54   bias -2.36     (at obs window 48)
+#     floor 1.00   MAE 2.17   bias -1.76     (at obs window 48)
+#
+# Monotone in both MAE and bias, at every lead individually, at every fit
+# window tested from 8 to 60 observations. Leave-one-day-out picked the
+# same configuration for all six held-out days and its held-out MAE
+# (2.14) matched its in-sample MAE, so this is not one warm week being
+# fitted.
+#
+# 1.00 means the diurnal term is now inert on this path - the factor is
+# min(1.0, floor + ...) and the floor alone reaches the cap. That is the
+# honest reading of the result rather than an accident: the argument for
+# damping is that a slope measured ON a turning point is about to
+# reverse, and a window aimed at the peak from below is not that case.
+# The cloud/wind damping and the wrong-direction penalty still apply, so
+# the raw trend is not taken unconditionally.
+#
+# What it does NOT fix: a residual bias of about -1.8F. The projection
+# still under-reads the daily high, the sweep is clipped at 1.0, and no
+# floor can close the rest. Deliberately NOT corrected with a fitted
+# offset: six days is nowhere near enough to justify one, and the live
+# model blends toward NWS, which already absorbs most of it (measured
+# live bias at the 1h checkpoint over 13 finalized days is -0.85F, not
+# -1.8F). Closing the remainder means improving the blend, not adding a
+# constant.
+PEAK_PROJECTION_DAMPING_FLOOR = 1.00
+
+# Observations in the window the DAILY-HIGH projection fits its trend
+# over. Separate from the 8 that estimate_daily_extremes uses elsewhere,
+# and much longer, because the backtest is unambiguous that the short
+# window was the single biggest source of error in this projection. At
+# KSEA's ~5-minute cadence 48 observations is about four hours. Mean MAE
+# across leads 1/2/3/4/6h at floor 1.00:
+#
+#     8 obs (40 min)   3.99      32 obs (160 min)  2.32
+#    16 obs (80 min)   2.62      48 obs (240 min)  2.17
+#    24 obs (120 min)  2.30      60 obs (300 min)  2.28
+#
+# A clear interior minimum, not a boundary artefact - past four hours the
+# straight-line fit starts fighting the curvature of the diurnal cycle
+# and gives the gains back.
+#
+# This is deliberately scoped to the high projection alone. The low side
+# mostly does not fit a trend at all (once today's low has passed it
+# reads the NWS forecast directly), and estimate_temp's arbitrary-target
+# calls were not part of this backtest, so neither is changed on the
+# strength of a result measured somewhere else.
+PEAK_TREND_WINDOW_OBS = 48
 
 
 def _hour_to_datetime(base_date, hour_decimal, tzinfo):
@@ -691,9 +737,138 @@ OFFSHORE_FLOW_INDEX_THRESHOLD = 8.0
 TREND_SE_WEIGHT = 1.0
 
 
-def _slope_standard_error(x, y, slope, intercept):
-    """Standard error of the OLS slope: s / sqrt(Sxx), with s the residual
-    standard deviation.
+# ---------------------------------------------------------------------------
+# Trend-fit weighting
+#
+# The fit's inputs are not equally trustworthy. About 93% of KSEA's
+# observations report a whole degree Celsius (+/-0.5C = +/-0.9F of
+# quantisation slack); only the :53 METARs carry tenths (+/-0.05C =
+# +/-0.09F). Fitting a straight line through both classes with equal
+# weight throws away the one reading in the window that actually knows
+# where the temperature was, and _slope_standard_error already measures
+# what that costs: on a representative window, reading noise alone moves
+# the fitted slope by sd ~0.97 F/hr against a slope of -4.11 F/hr.
+#
+# Inverse-variance weighting is the textbook answer, but the naive form
+# is wrong here, and dangerously so. Quantisation is not the only error
+# in the fit: over a 40-minute window the temperature does not actually
+# follow a straight line, and there is genuine small-scale variability on
+# top. That component is COMMON to every reading, tenths or not. Leaving
+# it out gives the tenths reading a variance ~100x smaller than its
+# neighbours, and since 55% of 8-observation windows contain exactly one
+# tenths reading (44% contain none at all - measured over 2169
+# observations), the fit would pivot through that single anchor point.
+# That is not a more precise trend, it is a one-point trend.
+#
+# So each reading's variance is quantisation PLUS a common atmospheric
+# term:
+#
+#     sigma_i^2 = sigma_quantisation(i)^2 + sigma_atmospheric^2
+#
+# That form has the old behaviour at one end - as the atmospheric term
+# grows the weights converge to uniform and this reduces exactly to the
+# previous unweighted polyfit - which is what makes the before/after
+# backtest a like-for-like comparison rather than two unrelated models.
+#
+# sigma_atmospheric is MEASURED, not swept for MAE. Residuals of a
+# straight-line fit at the tenths readings estimate it directly, since
+# those readings carry essentially no quantisation error of their own;
+# the whole-degree readings should then sit above them by exactly the
+# quantisation variance. Over 2169 KSEA observations:
+#
+#   window span   sd(resid) whole   sd(resid) tenths   variance gap
+#      40 min          0.534             0.421            +0.108
+#      80 min          0.659             0.515            +0.169
+#     120 min          0.740             0.581            +0.210
+#     240 min          0.967             0.790            +0.310
+#
+# The gap converges on the +0.267 the quantisation model predicts as the
+# window lengthens (it reads low on short windows because with only 8
+# points the fit absorbs a good part of each reading's rounding error
+# into the fitted line itself), which is the check that this decomposition
+# is the right one and not just two numbers that happen to differ.
+#
+# The atmospheric term is not a constant: it grows with the window's
+# span, because a straight line through four hours of a diurnal curve
+# misses more curvature than one through forty minutes. Fitting the four
+# measurements above gives sd ~ 0.48 * span_hours^0.35 (reproduces all
+# four to within 0.01F). Scaling it this way rather than freezing one
+# number keeps the weighting correct at every window length in the
+# codebase, not just the one it was tuned at.
+_QUANT_SD_WHOLE_F = QUANTISED_HALF_WIDTH_F / math.sqrt(3.0)
+_QUANT_SD_TENTHS_F = TENTHS_HALF_WIDTH_F / math.sqrt(3.0)
+
+TREND_FIT_ATM_SD_AT_1H_F = 0.48
+TREND_FIT_ATM_SD_SPAN_EXPONENT = 0.35
+
+# Honest note on what this is worth: almost nothing, and it is worth
+# recording why rather than leaving the next person to re-derive it.
+#
+# The intuition that motivated this - "one reading is 100x more precise
+# than its neighbours, so weight it 100x" - compares the wrong
+# quantities. Inverse-variance weighting compares TOTAL variances, and
+# both classes carry the same atmospheric term, which over a four-hour
+# window (0.79F) dwarfs the quantisation difference between them (0.52F
+# vs 0.05F). The resulting weights are about 1.4:1, not 100:1. Measured
+# consequences at PEAK_TREND_WINDOW_OBS:
+#
+#   peak-projection MAE   2.17F -> 2.17F   (backtest, 6 days, 5 leads)
+#   mean slope SE        0.1223 -> 0.1218 F/hr   (-0.5%, 425 windows)
+#
+# So this is kept because it is the correct thing to do and costs
+# nothing, not because it bought anything. The point-estimate improvement
+# the same investigation was after came from the fit window and the
+# damping floor instead - see PEAK_TREND_WINDOW_OBS and
+# PEAK_PROJECTION_DAMPING_FLOOR. Anyone tempted to chase the tenths
+# readings harder should note that the only way to widen that 1.4:1 is to
+# shrink the atmospheric term, i.e. shorten the window - and the window
+# is exactly what needed lengthening.
+
+
+def _atmospheric_sd_f(span_hours):
+    """Common (non-quantisation) scatter of readings about a straight-line
+    fit spanning this many hours. See the block comment above."""
+    if span_hours is None or span_hours <= 0:
+        span_hours = 1.0
+    return TREND_FIT_ATM_SD_AT_1H_F * span_hours ** TREND_FIT_ATM_SD_SPAN_EXPONENT
+
+
+def _fit_weights(temps_f, span_hours=None, atmospheric_sd_f=None):
+    """Per-observation weights for the trend fit, or None for unweighted.
+
+    Returns 1/sigma_i, which is the convention np.polyfit's `w` expects
+    (it weights the UNsquared residual), not 1/sigma_i^2.
+
+    atmospheric_sd_f overrides the span-derived value; math.inf disables
+    weighting entirely, which is how the backtest runs the "before" arm.
+
+    Returns None when weighting cannot make a difference - weighting
+    disabled, or every reading in the window is the same precision class,
+    which is 44% of 8-observation windows - so the common case provably
+    takes the same path it always did.
+    """
+    if atmospheric_sd_f is None:
+        atmospheric_sd_f = _atmospheric_sd_f(span_hours)
+    if not math.isfinite(atmospheric_sd_f):
+        return None
+    whole = [is_whole_celsius(t) for t in temps_f]
+    if all(whole) or not any(whole):
+        return None
+    quant_sd = np.where(whole, _QUANT_SD_WHOLE_F, _QUANT_SD_TENTHS_F)
+    return 1.0 / np.sqrt(quant_sd ** 2 + atmospheric_sd_f ** 2)
+
+
+def _slope_standard_error(x, y, slope, intercept, w=None):
+    """Standard error of the fitted slope: s / sqrt(Sxx), with s the
+    residual standard deviation.
+
+    With weights (see _fit_weights) this is the weighted-least-squares
+    standard error - Sxx and the residual variance both taken about the
+    weighted mean, using w^2 as the precision weight since `w` is 1/sigma.
+    That matters for more than tidiness: down-weighting the noisy readings
+    is supposed to buy a better-determined slope, and if the reported
+    uncertainty didn't follow the weighting through, the band would keep
+    quoting the unweighted fit's error for a slope that no longer has it.
 
     This is the piece the band was missing. The trend is fit on 8
     observations that are themselves quantised to whole degrees Celsius
@@ -711,11 +886,13 @@ def _slope_standard_error(x, y, slope, intercept):
         return None
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
-    sxx = float(((x - x.mean()) ** 2).sum())
+    p = np.ones(n) if w is None else np.asarray(w, dtype=float) ** 2
+    xbar = float((p * x).sum() / p.sum())
+    sxx = float((p * (x - xbar) ** 2).sum())
     if sxx <= 0:
         return None
     resid = y - (slope * x + intercept)
-    s2 = float((resid ** 2).sum()) / (n - 2)
+    s2 = float((p * resid ** 2).sum()) / (n - 2)
     if s2 < 0:
         return None
     return float(np.sqrt(s2 / sxx))
@@ -869,7 +1046,7 @@ def estimate_from_df(
     df, hours_ahead, lat, lon,
     use_nws_forecast=True, nws_blend_mode="divergence",
     use_gradient=True, df_upwind=None, df_strait=None, df_interior_gap=None,
-    damping_floor=None,
+    damping_floor=None, trend_fit_atmospheric_sd_f=None,
 ):
     """
     Core estimation logic, given a dataframe of observations. Reused by both
@@ -898,13 +1075,25 @@ def estimate_from_df(
         role's data once instead of re-fetching per rolling window.
     damping_floor: override for DIURNAL_DAMPING_FLOOR, so
         backtest_peak_projection can sweep it. None uses the module value.
+    trend_fit_atmospheric_sd_f: override for
+        TREND_FIT_ATMOSPHERIC_SD_F, same purpose. math.inf reproduces the
+        old unweighted fit exactly, which is how the "before" arm of the
+        weighting backtest is run.
     """
     latest = df.iloc[-1]
     now = latest["time"]
 
     t0 = df["time"].iloc[0]
     elapsed_hours = (df["time"] - t0).dt.total_seconds() / 3600
-    slope, intercept = np.polyfit(elapsed_hours, df["temp_f"], 1)
+    # Not every reading in this window is equally trustworthy - see
+    # _fit_weights. None (the common case, and every case before this
+    # existed) makes polyfit do exactly what it did before.
+    fit_w = _fit_weights(
+        df["temp_f"],
+        span_hours=float(elapsed_hours.iloc[-1] - elapsed_hours.iloc[0]),
+        atmospheric_sd_f=trend_fit_atmospheric_sd_f,
+    )
+    slope, intercept = np.polyfit(elapsed_hours, df["temp_f"], 1, w=fit_w)
 
     spread_adjustment = 0
     if df["dewpoint_f"].notna().sum() >= 2:
@@ -945,7 +1134,8 @@ def estimate_from_df(
     # the slope itself takes: capped at TREND_HORIZON_HOURS and scaled by
     # the same damping, because that is what multiplies the slope into a
     # temperature change.
-    slope_se = _slope_standard_error(elapsed_hours, df["temp_f"], slope, intercept)
+    slope_se = _slope_standard_error(
+        elapsed_hours, df["temp_f"], slope, intercept, w=fit_w)
     trend_uncertainty_f = (
         slope_se * min(hours_ahead, TREND_HORIZON_HOURS) * combined_damping * TREND_SE_WEIGHT
         if slope_se is not None else None
@@ -1081,7 +1271,14 @@ def estimate_daily_extremes(station_id, obs_limit=8):
       at a different physical effect.
     """
     lat, lon, name = get_station_location(station_id)
-    df = get_observation_history(station_id, limit=obs_limit)
+    # One fetch, two windows. The high projection fits its trend over a
+    # much longer window than everything else here (see
+    # PEAK_TREND_WINDOW_OBS); pulling the long one and slicing the short
+    # one off its tail keeps that a single API call rather than two, and
+    # keeps both windows ending at the same observation.
+    peak_df = get_observation_history(
+        station_id, limit=max(obs_limit, PEAK_TREND_WINDOW_OBS))
+    df = peak_df.tail(obs_limit).reset_index(drop=True)
     now = df["time"].iloc[-1]
     today = now.date()
 
@@ -1265,7 +1462,7 @@ def estimate_daily_extremes(station_id, obs_limit=8):
         # at the peak-heat hour itself, the case diurnal_damping_factor
         # pins to the floor by construction. See that constant.
         peak_est = estimate_from_df(
-            df, horizon, lat, lon, damping_floor=PEAK_PROJECTION_DAMPING_FLOOR
+            peak_df, horizon, lat, lon, damping_floor=PEAK_PROJECTION_DAMPING_FLOOR
         )
         trend_only_high = max(observed_high, peak_est["estimated_temp_f"])
         blended_high, high_nws_weight = blend_toward_nws(
@@ -1746,7 +1943,8 @@ if __name__ == "__main__":
 
 def backtest_peak_projection(station_id="KSEA", actuals_by_date=None,
                              leads=(1, 2, 3, 4, 6, 8), floors=(PEAK_PROJECTION_DAMPING_FLOOR,),
-                             lookback_days=7, obs_limit=8):
+                             lookback_days=7, obs_limit=8,
+                             atmospheric_sds=(None,), per_day=False):
     """
     Backtests the DAILY-HIGH projection specifically, which backtest()
     above does not cover - that one scores estimate_temp at a fixed
@@ -1775,7 +1973,18 @@ def backtest_peak_projection(station_id="KSEA", actuals_by_date=None,
     (nws_climate.fetch_recent_cli_finals) rather than stream maxima when
     the question is settlement accuracy.
 
-    Returns {floor: {lead: {"n","bias","mae","mean_predicted"}}}.
+    atmospheric_sds: values to sweep for TREND_FIT_ATMOSPHERIC_SD_F (see
+    _fit_weights). math.inf is the unweighted fit - the "before" arm.
+    None means "use the module default".
+
+    per_day: also return each day's individual signed error, so a
+    leave-one-day-out check can be run over a sweep this small without
+    re-fetching anything.
+
+    Returns {(floor, atmospheric_sd): {lead: {"n","bias","mae",
+    "mean_predicted"[,"errors_by_date"]}}}. When atmospheric_sds is left
+    at its default single value the key is the bare floor, so existing
+    callers are unaffected.
     """
     lat, lon, _ = get_station_location(station_id)
     end = datetime.now(PST)
@@ -1792,11 +2001,13 @@ def backtest_peak_projection(station_id="KSEA", actuals_by_date=None,
         strait_df, _ = _fetch_role_df("strait", start - pad, end + pad)
         interior_df, _ = _fetch_role_df("interior_gap", start - pad, end + pad)
 
+    single_sd = len(atmospheric_sds) == 1 and atmospheric_sds[0] is None
     results = {}
     for floor in floors:
+      for atm_sd in atmospheric_sds:
         per_lead = {}
         for lead in leads:
-            errs, preds = [], []
+            errs, preds, by_date = [], [], {}
             for day, actual in sorted((actuals_by_date or {}).items()):
                 sunrise_h, sunset_h = get_sun_times(lat, lon, day)
                 peak_h = sunrise_h + (sunset_h - sunrise_h) * PEAK_HEAT_FRACTION
@@ -1815,16 +2026,20 @@ def backtest_peak_projection(station_id="KSEA", actuals_by_date=None,
                     window, horizon, lat, lon,
                     use_nws_forecast=False, use_gradient=use_gradient,
                     df_upwind=upwind_df, df_strait=strait_df, df_interior_gap=interior_df,
-                    damping_floor=floor,
+                    damping_floor=floor, trend_fit_atmospheric_sd_f=atm_sd,
                 )
                 predicted = max(observed_high, est["estimated_temp_f"])
                 errs.append(predicted - actual)
                 preds.append(predicted)
-            per_lead[lead] = {
+                by_date[day] = round(predicted - actual, 2)
+            entry = {
                 "n": len(errs),
                 "bias": round(sum(errs) / len(errs), 2) if errs else None,
                 "mae": round(sum(abs(e) for e in errs) / len(errs), 2) if errs else None,
                 "mean_predicted": round(sum(preds) / len(preds), 2) if preds else None,
             }
-        results[floor] = per_lead
+            if per_day:
+                entry["errors_by_date"] = by_date
+            per_lead[lead] = entry
+        results[floor if single_sd else (floor, atm_sd)] = per_lead
     return results

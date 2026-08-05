@@ -156,6 +156,206 @@ def _stats(errors):
     return {"n": n, "bias_f": round(bias, 2), "mae_f": round(mae, 2)}
 
 
+# ---------------------------------------------------------------------------
+# Condition buckets
+#
+# One pooled accuracy figure says the same thing on a still, clear day as
+# on one with a marine push coming in, which is precisely when the model
+# is least like its own average. Every snapshot already records the
+# condition indices that were live when the prediction was made, so the
+# days can be grouped by them and scored separately.
+#
+# Thresholds are weather_estimator's own "elevated enough to call out"
+# cutoffs, not new ones invented here, so a day is bucketed "active" by
+# exactly the test that made the model flag it as active at the time.
+# Imported lazily: this module is deliberately runnable and importable
+# without pandas/requests/astral (see summarize()'s note on deriving local
+# today from the log's own timestamps), and the fallback keeps it that way
+# if that ever stops holding.
+# ---------------------------------------------------------------------------
+
+# The cross-station gradient trend has no equivalent published cutoff in
+# weather_estimator - the persistence fallback's +/-0.015 inHg/hr is the
+# nearest thing the codebase already commits to, so it is reused rather
+# than a fresh number being chosen to make these buckets come out well.
+CONDITION_PRESSURE_TREND_THRESHOLD = 0.015
+
+
+_FALLBACK_INDEX_THRESHOLDS = (8.0, 8.0)
+_index_thresholds_cache = None
+
+
+def _index_thresholds():
+    """weather_estimator's live thresholds, or a copy of them.
+
+    The copy is the failure mode worth being loud about: if it silently
+    stood in after those constants had been recalibrated, every bucket
+    would be split at the old cutoffs while the model flagged conditions
+    at the new ones, and the "similar past days" would stop being similar
+    by any definition the model recognises. Reported once per process
+    rather than per row - classify_conditions runs on every logged row.
+    """
+    global _index_thresholds_cache
+    if _index_thresholds_cache is None:
+        try:
+            from weather_estimator import (
+                MARINE_PUSH_INDEX_THRESHOLD, OFFSHORE_FLOW_INDEX_THRESHOLD)
+            _index_thresholds_cache = (
+                MARINE_PUSH_INDEX_THRESHOLD, OFFSHORE_FLOW_INDEX_THRESHOLD)
+        except Exception as e:
+            print(f"calibration_log: could not read weather_estimator's index "
+                  f"thresholds ({e}); condition buckets fall back to "
+                  f"{_FALLBACK_INDEX_THRESHOLDS}, which is only correct while "
+                  f"those constants are unchanged")
+            _index_thresholds_cache = _FALLBACK_INDEX_THRESHOLDS
+    return _index_thresholds_cache
+
+
+def classify_conditions(row):
+    """Condition state of one logged snapshot, as {axis: state}.
+
+    An axis whose index is missing from the row is omitted entirely rather
+    than defaulted to "steady" - the early days of the log predate the
+    station network, and calling those days steady would file genuinely
+    unknown conditions under the calmest bucket and quietly inflate its
+    apparent accuracy.
+    """
+    mpi_t, ofi_t = _index_thresholds()
+    out = {}
+    mpi = row.get("marine_push_index")
+    if mpi is not None:
+        out["marine_push"] = "active" if mpi > mpi_t else "steady"
+    ofi = row.get("offshore_flow_index")
+    if ofi is not None:
+        out["offshore_flow"] = "rising" if ofi > ofi_t else "steady"
+    pgt = row.get("pressure_gradient_trend_inhg_per_hr")
+    if pgt is not None:
+        if pgt < -CONDITION_PRESSURE_TREND_THRESHOLD:
+            out["pressure_gradient"] = "falling"
+        elif pgt > CONDITION_PRESSURE_TREND_THRESHOLD:
+            out["pressure_gradient"] = "rising"
+        else:
+            out["pressure_gradient"] = "steady"
+    return out
+
+
+# Backoff ladder, most specific first. A bucket is used only if it has at
+# least MIN_CONDITION_BUCKET_SAMPLES scored days behind it; otherwise the
+# next level down is tried, and the pooled all-days figure is the floor.
+#
+# pressure_gradient is dropped first because it is the least independent
+# of the three: compute_marine_push_index is literally a rescaled average
+# of that same gradient trend, so the third axis mostly re-splits days the
+# first axis has already split, spending sample size for very little new
+# information.
+#
+# There is deliberately no single-axis rung between the pair and the
+# pooled figure. On the log as it stands a marine_push-only bucket would
+# hold 10 of the 13 scored high-side days - close enough to the pooled
+# figure to be indistinguishable from it, while sounding more specific
+# than it is.
+CONDITION_BACKOFF_LEVELS = (
+    ("marine_push", "offshore_flow", "pressure_gradient"),
+    ("marine_push", "offshore_flow"),
+    (),
+)
+
+# Five is the same "enough to say something, not enough to lean on"
+# threshold daily_performance.py uses for its low_sample rollup flag. It
+# is deliberately lower than MIN_NEXT_DAY_SAMPLES (10): that one gates a
+# figure quoted with no qualifier attached, whereas this one is always
+# displayed with its own sample count next to it, so the reader can see
+# exactly how thin it is.
+MIN_CONDITION_BUCKET_SAMPLES = 5
+
+_CONDITION_LABELS = {
+    ("marine_push", "active"): "marine push active",
+    ("marine_push", "steady"): "marine push steady",
+    ("offshore_flow", "rising"): "offshore flow rising",
+    ("offshore_flow", "steady"): "offshore flow steady",
+    ("pressure_gradient", "falling"): "pressure falling",
+    ("pressure_gradient", "rising"): "pressure rising",
+    ("pressure_gradient", "steady"): "pressure steady",
+}
+
+
+def describe_conditions(conditions, axes):
+    """Human phrase for the subset of `conditions` on `axes`."""
+    parts = [
+        _CONDITION_LABELS.get((a, conditions[a]), f"{a} {conditions[a]}")
+        for a in axes if a in conditions
+    ]
+    return ", ".join(parts)
+
+
+def condition_confidence(side, conditions,
+                         min_samples=MIN_CONDITION_BUCKET_SAMPLES,
+                         summary=None):
+    """
+    Measured same-day accuracy for the finalized days whose conditions at
+    prediction time matched `conditions`, walked down CONDITION_BACKOFF_LEVELS
+    until a level has enough of them.
+
+    side: "high" or "low". conditions: a classify_conditions() dict for
+    the prediction being made now.
+
+    Returns None when even the pooled all-days figure is too thin to
+    quote. Otherwise a dict with:
+
+        pct        confidence %, via the same _mae_to_confidence_pct
+                   mapping the next-day figure uses, so the two numbers on
+                   the page mean the same thing
+        n          scored days behind it
+        mae_f      those days' MAE
+        axes       which condition axes it is bucketed on - () for pooled
+        label      human phrase for the bucket, "" for pooled
+        matched    True if bucketed on at least one axis, False if this is
+                   the pooled fallback
+        tried      [(axes, n)] for every level attempted, so the caller can
+                   say why a more specific bucket was not used
+
+    A bucket short of min_samples is never reported as a number. That is
+    the whole point of the ladder: the alternative is a "confidence: 62%
+    (based on 2 similar days)" that reads as a measurement and is a
+    coin flip.
+    """
+    key = "same_day_high" if side == "high" else "same_day_low"
+    if summary is None:
+        summary = summarize()
+    scored = [
+        d[key] for d in summary["days"]
+        if d[key]["error"] is not None and d[key].get("conditions") is not None
+    ]
+
+    tried = []
+    for axes in CONDITION_BACKOFF_LEVELS:
+        # A day only counts toward a bucket if it recorded every axis that
+        # bucket is defined on - see classify_conditions on why a missing
+        # index is not "steady".
+        def matches(day_conditions):
+            for a in axes:
+                want = conditions.get(a)
+                if want is None or day_conditions.get(a) != want:
+                    return False
+            return True
+
+        errors = [d["error"] for d in scored if matches(d["conditions"])]
+        tried.append((axes, len(errors)))
+        if len(errors) >= min_samples:
+            stats = _stats(errors)
+            return {
+                "pct": _mae_to_confidence_pct(stats["mae_f"]),
+                "n": stats["n"],
+                "mae_f": stats["mae_f"],
+                "bias_f": stats["bias_f"],
+                "axes": axes,
+                "label": describe_conditions(conditions, axes),
+                "matched": bool(axes),
+                "tried": tried,
+            }
+    return None
+
+
 def summarize():
     """
     For each date with data, compares:
@@ -212,6 +412,12 @@ def summarize():
         )
         pre_peak = [r for r in day_rows if r["high_status"] == "projected"]
         last_high_projection = pre_peak[-1]["estimated_high_f"] if pre_peak else None
+        # Conditions as they stood at the moment the prediction being
+        # scored was made - the same row the projection itself comes from,
+        # not the day's average or its end state. Bucketing by anything
+        # else would be scoring the model against information it did not
+        # have. See classify_conditions.
+        high_conditions = classify_conditions(pre_peak[-1]) if pre_peak else None
 
         final_low = min(
             (r["observed_low_so_far_f"] for r in day_rows if r["observed_low_so_far_f"] is not None),
@@ -219,6 +425,7 @@ def summarize():
         )
         pre_dawn = [r for r in day_rows if r["low_status"] == "today"]
         last_low_projection = pre_dawn[-1]["estimated_low_f"] if pre_dawn else None
+        low_conditions = classify_conditions(pre_dawn[-1]) if pre_dawn else None
 
         next_final_high = None
         next_final_low = None
@@ -252,9 +459,11 @@ def summarize():
             "date": date,
             "complete": today_local is None or date < today_local,
             "same_day_high": {"projection": last_high_projection, "final": final_high,
-                               "error": err(last_high_projection, final_high, date)},
+                               "error": err(last_high_projection, final_high, date),
+                               "conditions": high_conditions},
             "same_day_low": {"projection": last_low_projection, "final": final_low,
-                              "error": err(last_low_projection, final_low, date)},
+                              "error": err(last_low_projection, final_low, date),
+                              "conditions": low_conditions},
             # Scored against the FOLLOWING date, so completeness is that
             # date's, not this one's.
             "next_day_high": {"projection": tomorrow_high_forecast, "final": next_final_high,

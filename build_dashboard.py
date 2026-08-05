@@ -32,7 +32,11 @@ from observation_precision import (
     format_reading, precision_note, is_whole_celsius,
     format_headline_reading, headline_precision_note, settlement_band,
 )
-from calibration_log import record_snapshot, next_day_confidence_pct, summarize, MIN_NEXT_DAY_SAMPLES
+from calibration_log import (
+    record_snapshot, next_day_confidence_pct, summarize, MIN_NEXT_DAY_SAMPLES,
+    classify_conditions, condition_confidence, describe_conditions,
+    MIN_CONDITION_BUCKET_SAMPLES,
+)
 from daily_performance import (
     finalize_pending_days,
     reconcile_stream_fallback_actuals,
@@ -588,6 +592,64 @@ def tomorrow_hint(source, measured_pct, n_samples, min_samples=MIN_NEXT_DAY_SAMP
         f"only {n_samples} of {min_samples} finalized next-day predictions using this source are "
         f"logged so far; this will switch to a measured number once enough accumulate."
     )
+def build_condition_confidence_html(same_day_confidence):
+    """
+    The "how well has this model done on days that looked like today"
+    panel, one row per side.
+
+    Deliberately shows the sample count and the bucket it came from in the
+    same breath as the number. "82%" alone invites the reader to treat all
+    such numbers alike, when one may rest on seven matched days and another
+    on a pooled thirteen because no specific bucket was populated enough
+    yet - and the difference between those two claims is the entire point
+    of bucketing. When a more specific bucket was tried and rejected, that
+    is stated too, with the count it fell short at, so a reader can see the
+    specific figure coming rather than wonder whether it exists.
+    """
+    rows = []
+    for side, arrow, cls in (("high", "↑", "hilo-arrow-high"),
+                             ("low", "↓", "hilo-arrow-low")):
+        conf = same_day_confidence.get(side)
+        if conf is None:
+            rows.append(
+                f'<div class="hilo-detail"><span class="hilo-detail-arrow {cls}">{arrow}</span>'
+                f'<span class="hilo-value">—</span>'
+                f'<span class="hilo-detail-caption">not enough finalized days yet</span></div>'
+            )
+            continue
+        if conf["matched"]:
+            basis = f'based on {conf["n"]} days with {conf["label"]}'
+        else:
+            specific = [
+                (axes, n) for axes, n in conf["tried"] if axes and n
+            ]
+            shortfall = (
+                f' &middot; no specific match yet ({specific[0][1]} of '
+                f'{MIN_CONDITION_BUCKET_SAMPLES} needed)'
+                if specific else ""
+            )
+            basis = f'based on all {conf["n"]} finalized days{shortfall}'
+        rows.append(
+            f'<div class="hilo-detail"><span class="hilo-detail-arrow {cls}">{arrow}</span>'
+            f'<span class="hilo-value">{conf["pct"]}%</span>'
+            f'<span class="hilo-detail-caption">{basis}</span>'
+            f'<span class="hilo-detail-caption hero-precision">MAE {conf["mae_f"]}°F, '
+            f'bias {conf["bias_f"]:+.2f}°F</span></div>'
+        )
+    return (
+        '<div class="module-label" style="margin-top: 16px;">Confidence, '
+        'from similar past days</div>'
+        f'<div class="hilo-detail-row">{"".join(rows)}</div>'
+        '<div class="hint">Measured from finalized days whose marine-push, '
+        'offshore-flow and pressure-gradient state at prediction time matched '
+        "today's, not one average across every day regardless of conditions "
+        '(calibration_log.py). Falls back to the all-days figure until a '
+        f'specific combination has {MIN_CONDITION_BUCKET_SAMPLES} matching days '
+        'behind it - the sample count above always says which one you are '
+        'looking at.</div>'
+    )
+
+
 LOW_CAPTIONS = {
     "today": "today's overnight low, almost here",
     "tonight": "expected low tonight",
@@ -838,6 +900,30 @@ def main():
         measured_conf["low"] if measured_conf["low"] is not None else extremes["tomorrow_low_confidence_pct"]
     )
 
+    # Same-day confidence, measured against the finalized days whose
+    # conditions at prediction time looked like right now's rather than
+    # against every day pooled together. `est` already carries exactly the
+    # index fields classify_conditions reads, so the live state is
+    # classified by the identical function and thresholds that classified
+    # the historical rows - if those two ever drifted apart the buckets
+    # would be comparing a day to days it isn't actually like.
+    today_conditions = {}
+    same_day_confidence = {"high": None, "low": None}
+    try:
+        today_conditions = classify_conditions(est)
+        _summary = summarize()
+        for _side in ("high", "low"):
+            same_day_confidence[_side] = condition_confidence(
+                _side, today_conditions, summary=_summary)
+    except Exception as e:
+        # Never fatal: the panel degrades to its explanatory note. Loud
+        # rather than silent for the same reason the NWS capture is - a
+        # quietly missing confidence figure looks identical to one that is
+        # legitimately still accumulating samples.
+        print(f"calibration_log: condition_confidence failed: {e}")
+
+    same_day_confidence_html = build_condition_confidence_html(same_day_confidence)
+
     window_start = now - timedelta(hours=SPARKLINE_HOURS)
     hist = get_observation_history(STATION, start=window_start, end=now)
 
@@ -1024,6 +1110,7 @@ def main():
         "observed_low": format_headline_reading(extremes["observed_low_so_far_f"]),
         "observed_low_precision_note": precision_note(extremes["observed_low_so_far_f"]) or "",
         "observed_low_time": _fmt_time(extremes["observed_low_so_far_time"]),
+        "same_day_confidence_html": same_day_confidence_html,
         "tomorrow_high": f"{extremes['tomorrow_high_f']:.2f}",
         "tomorrow_confidence_pct": tomorrow_high_confidence_pct,
         "tomorrow_meta": (
