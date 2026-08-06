@@ -1791,7 +1791,8 @@ def average_midday_growth(station_id, lookback_days=5, tolerance_minutes=30):
 # Backtest
 # ---------------------------------------------------------------------------
 
-def backtest(station_id, hours_ahead=3, window_obs=8, lookback_days=5):
+def backtest(station_id, hours_ahead=3, window_obs=8, lookback_days=5,
+             trend_fit_atmospheric_sd_f=None):
     """
     Pull `lookback_days` of historical observations for a station, then slide
     through them: at each point t (once we have `window_obs` prior readings),
@@ -1869,6 +1870,7 @@ def backtest(station_id, hours_ahead=3, window_obs=8, lookback_days=5):
                 use_nws_forecast=False,
                 use_gradient=use_gradient, df_upwind=upwind_df,
                 df_strait=strait_df, df_interior_gap=interior_df,
+                trend_fit_atmospheric_sd_f=trend_fit_atmospheric_sd_f,
             )
         except Exception:
             continue
