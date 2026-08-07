@@ -507,6 +507,83 @@
     color: var(--accent-warm);
     font-size: 12.5px;
   }
+  .spark-metric-label {
+    fill: var(--text-strong);
+    font-size: 13px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Metric switcher. CSS-only: the radios are the state, the labels are
+     the tabs, and :checked drives which panel shows. Radios stay
+     focusable (clipped, not display:none) so the tab strip is reachable
+     by keyboard and announced as a radio group. */
+  .metric-switcher { position: relative; }
+  .metric-radio {
+    position: absolute;
+    opacity: 0;
+    width: 1px; height: 1px;
+    pointer-events: none;
+  }
+  .metric-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    margin-bottom: 12px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.10);
+    border: 1px solid var(--glass-line);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .metric-tabs::-webkit-scrollbar { display: none; }
+  .metric-tab {
+    flex: 1 1 auto;
+    text-align: center;
+    white-space: nowrap;
+    padding: 7px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text-faint);
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.18s ease, color 0.18s ease;
+  }
+  .metric-tab:hover { color: var(--text-soft); }
+  .metric-panel { display: none; }
+
+  /* One rule per tab: the Nth checked radio lights the Nth label and
+     reveals the Nth panel. Written out rather than generated because
+     there are five and CSS has no loop. */
+  .metric-radio:nth-of-type(1):checked ~ .metric-tabs .metric-tab:nth-child(1),
+  .metric-radio:nth-of-type(2):checked ~ .metric-tabs .metric-tab:nth-child(2),
+  .metric-radio:nth-of-type(3):checked ~ .metric-tabs .metric-tab:nth-child(3),
+  .metric-radio:nth-of-type(4):checked ~ .metric-tabs .metric-tab:nth-child(4),
+  .metric-radio:nth-of-type(5):checked ~ .metric-tabs .metric-tab:nth-child(5) {
+    background: var(--glass-bg-strong);
+    color: var(--text-strong);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+  }
+  .metric-radio:nth-of-type(1):checked ~ .metric-panel:nth-of-type(1),
+  .metric-radio:nth-of-type(2):checked ~ .metric-panel:nth-of-type(2),
+  .metric-radio:nth-of-type(3):checked ~ .metric-panel:nth-of-type(3),
+  .metric-radio:nth-of-type(4):checked ~ .metric-panel:nth-of-type(4),
+  .metric-radio:nth-of-type(5):checked ~ .metric-panel:nth-of-type(5) {
+    display: block;
+  }
+  .metric-radio:focus-visible ~ .metric-tabs {
+    outline: 2px solid var(--text-strong);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .metric-panel { animation: metric-fade 0.28s ease-out both; }
+  }
+  @keyframes metric-fade {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: none; }
+  }
 
   .volume-chart { width: 100%; height: auto; display: block; margin-top: 10px; }
   .volume-bar { fill: var(--accent-warm-soft); opacity: 0.5; }
@@ -829,6 +906,16 @@
         <span>{{sparkline_hours}}h ago</span>
         <span class="spark-caption-target">{{target_time}}</span>
       </div>
+    </div>
+
+    <div class="glass">
+      <div class="module-label">Conditions · last {{sparkline_hours}}h</div>
+      {{metric_switcher_html}}
+      <div class="spark-caption">
+        <span>{{sparkline_hours}}h ago</span>
+        <span>now</span>
+      </div>
+      <div class="hint">The same station readings the model itself runs on - what the trend fit and the cross-station gradient network are built from. History only; the dashed projection above is temperature-specific.</div>
     </div>
 
     <div class="glass">

@@ -17,6 +17,8 @@ import json
 import os
 from datetime import date, datetime, timedelta
 
+import pandas as pd
+
 from weather_estimator import (
     estimate_temp,
     estimate_daily_extremes,
@@ -116,6 +118,137 @@ def build_sparkline_svg(times, temps, est_time, est_temp, width=640, height=160)
   <text x="{est_pt[0]:.1f}" y="{est_label_y:.1f}" text-anchor="end" class="spark-est-label">{est_temp:.0f}°</text>
 </svg>
 """.strip()
+
+
+# Which observation columns the metric switcher offers, in tab order.
+# Every one of these is already being pulled by get_observation_history
+# for the trend fit and the gradient network - none of this adds a
+# request. (key, tab label, unit, decimals, aria noun)
+METRIC_TABS = [
+    ("temp_f", "Temp", "°F", 1, "temperature"),
+    ("wind_mph", "Wind", " mph", 0, "wind speed"),
+    ("pressure_inhg", "Pressure", " inHg", 2, "barometric pressure"),
+    ("dewpoint_f", "Dew pt", "°F", 1, "dew point"),
+    ("cloud_pct", "Cloud", "%", 0, "cloud cover"),
+]
+
+
+def build_metric_chart_svg(times, values, unit, decimals, aria, width=640, height=150):
+    """One metric's recent history, in the same visual language as the
+    hero sparkline - same area+line+now-dot, same classes.
+
+    Deliberately NOT build_sparkline_svg with arguments bolted on: that
+    one's whole job is the projection (the dashed segment, the haloed
+    estimate dot, its printed label, the guide line down to the axis), and
+    none of those exist for wind or pressure, which have history only.
+    Threading "no projection" through it would have left half its body
+    behind a conditional for no gain.
+
+    Gaps matter here in a way they don't for temperature: cloud_fraction
+    in particular is absent from plenty of observations, so the series is
+    drawn as separate polylines split on missing values rather than one
+    path that would draw a straight line across a hole it has no data for.
+    """
+    pts_all = [(t, v) for t, v in zip(times, values)]
+    present = [(t, v) for t, v in pts_all if v is not None and not pd.isna(v)]
+    if len(present) < 2:
+        return (
+            '<div class="hint" style="padding:18px 0;">'
+            f"No {aria} readings in this window.</div>"
+        )
+
+    pad_x, pad_top, pad_bottom = 8, 22, 26
+    vals = [v for _, v in present]
+    lo, hi = min(vals), max(vals)
+    span = max(hi - lo, 1e-6)
+    lo -= span * 0.18
+    hi += span * 0.18
+    span = hi - lo
+
+    t0, t1 = pts_all[0][0], pts_all[-1][0]
+    total = max((t1 - t0).total_seconds(), 1)
+
+    def xy(t, v):
+        x = pad_x + (width - 2 * pad_x) * ((t - t0).total_seconds() / total)
+        y = pad_top + (height - pad_top - pad_bottom) * (1 - (v - lo) / span)
+        return x, y
+
+    # Split into runs of consecutive present values.
+    runs, cur = [], []
+    for t, v in pts_all:
+        if v is None or pd.isna(v):
+            if len(cur) > 1:
+                runs.append(cur)
+            cur = []
+        else:
+            cur.append(xy(t, v))
+    if len(cur) > 1:
+        runs.append(cur)
+
+    lines = "".join(
+        '<path d="M ' + " L ".join(f"{x:.1f},{y:.1f}" for x, y in r) + '" class="spark-line" />'
+        for r in runs
+    )
+    # Area under the longest run only - shading every fragment of a gappy
+    # series reads as noise rather than as one trend.
+    area = ""
+    if runs:
+        big = max(runs, key=len)
+        area = (
+            '<path d="M ' + " L ".join(f"{x:.1f},{y:.1f}" for x, y in big)
+            + f' L {big[-1][0]:.1f},{height - pad_bottom} L {big[0][0]:.1f},{height - pad_bottom} Z"'
+            ' class="spark-area" />'
+        )
+
+    last_x, last_y = xy(*present[-1])
+    last_v = present[-1][1]
+    label_y = max(last_y - 12, 14)
+    return f"""
+<svg viewBox="0 0 {width} {height}" class="sparkline" preserveAspectRatio="none" role="img" aria-label="{aria}, last {SPARKLINE_HOURS} hours">
+  {area}
+  {lines}
+  <circle cx="{last_x:.1f}" cy="{last_y:.1f}" r="4" class="spark-now-dot" />
+  <text x="{last_x:.1f}" y="{label_y:.1f}" text-anchor="end" class="spark-metric-label">{last_v:.{decimals}f}{unit}</text>
+</svg>
+""".strip()
+
+
+def build_metric_switcher_html(hist):
+    """Tabbed metric charts, CSS-only.
+
+    No JavaScript: this page is a statically generated file with none, and
+    adding a script purely to toggle visibility would be the first script
+    on it. Hidden radio inputs plus :checked sibling selectors do the same
+    job, keep the tabs keyboard-operable and screen-reader-labelled for
+    free, and survive the Artifact CSP without a thought.
+    """
+    df = hist.copy()
+    # cloud_fraction is 0-1; everything else is already in display units.
+    df["cloud_pct"] = df["cloud_fraction"] * 100
+    times = list(df["time"])
+
+    inputs, tabs, panels = [], [], []
+    for i, (key, label, unit, decimals, aria) in enumerate(METRIC_TABS):
+        checked = " checked" if i == 0 else ""
+        inputs.append(
+            f'<input type="radio" name="metric" id="metric-{key}" class="metric-radio"{checked}>'
+        )
+        tabs.append(f'<label for="metric-{key}" class="metric-tab">{label}</label>')
+        chart = build_metric_chart_svg(
+            times, list(df[key]) if key in df else [], unit, decimals, aria
+        )
+        panels.append(f'<div class="metric-panel">{chart}</div>')
+
+    return (
+        '<div class="metric-switcher">'
+        + "".join(inputs)
+        # <nav>, not <div>, and that is load-bearing: the panel selectors
+        # use :nth-of-type, which counts among same-tag siblings, so a div
+        # tab strip would shift every panel's index by one.
+        + '<nav class="metric-tabs">' + "".join(tabs) + "</nav>"
+        + "".join(panels)
+        + "</div>"
+    )
 
 
 def build_volume_bars_svg(hourly, tzinfo, width=640, height=190):
@@ -1125,6 +1258,7 @@ def main():
         "n_observations": est["n_observations"],
         "sparkline_svg": svg,
         "sparkline_hours": SPARKLINE_HOURS,
+        "metric_switcher_html": build_metric_switcher_html(hist),
         "data_json": json.dumps(est, default=str, indent=2),
         # A model estimate is not a station reading, so format_reading's
         # quantisation range never applied here - it only ever fired when an
