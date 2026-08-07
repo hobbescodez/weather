@@ -1009,19 +1009,86 @@ TREND_HORIZON_HOURS = 6
 NWS_BLEND_START_HOURS = 3.0
 NWS_BLEND_FULL_HOURS = 5.0
 
+# The high side gets its own pair, because the two sides turned out to
+# want opposite things and a shared constant cannot serve both.
+#
+# Re-fitted 2026-08-07 against the checkpoints calibration_log has been
+# recording all along - trend_only_high_f and nws_high_forecast_daily_f
+# logged side by side, scored against the CLI actual. That log is the
+# historical-forecast record backtest() never had (forecastHourly only
+# ever exposes the forecast as issued now), so this is the first time the
+# blend could be fitted against outcomes rather than reasoned about.
+# 119 checkpoints over 7 days:
+#
+#   lead    trend only   NWS only   shipped ramp
+#   0-1h        1.53       1.20        1.53
+#   1-2h        2.06       1.46        2.06
+#   2-3h        1.84       1.49        1.84
+#   3-5h        2.35       1.57        2.05
+#   5h+        10.04       1.31        1.31
+#
+# NWS wins at every lead, the MAE surface is monotone in w with no
+# interior optimum, and leave-one-day-out picks w=1.00 for all seven
+# held-out days (held-out MAE 1.38 vs 1.81 for the shipped ramp). So the
+# ramp is inert on this side now - both constants at 0 means every
+# non-negative lead takes the forecast whole.
+#
+# Why the old numbers said the opposite: the table this ramp was
+# originally fitted from recorded "NWS 2.00" at short lead. That figure
+# was measured on nws_*_forecast_at_target_f, the at-target sample, which
+# was later found to read 1.60F cold on highs and deliberately replaced
+# by the daily extremum (see estimate_daily_extremes). Measured on both
+# variants over the same checkpoints: at-target MAE 2.29 / bias -2.00,
+# daily extremum MAE 1.57 / bias -0.71. The ramp was fitted against an
+# input that has since been fixed, and was never re-fitted.
+#
+# What this does NOT do is remove the local observations. The
+# max(observed_high, blended) clamp is untouched, and that is the part
+# doing the real anchoring - today's high still cannot print below a
+# temperature already recorded today. What loses to NWS is the trend
+# EXTRAPOLATION, not the observation. And blend_toward_nws still degrades
+# to pure trend whenever the forecast is unavailable, so an NWS outage
+# behaves exactly as before.
+NWS_BLEND_START_HOURS_HIGH = 0.0
+NWS_BLEND_FULL_HOURS_HIGH = 0.0
 
-def nws_blend_weight(hours_to_target):
+# The low side keeps the original ramp, deliberately. Scored the same way
+# over 43 checkpoints / 7 days it comes out backwards from the high side:
+#
+#   lead    trend only   NWS only   shipped ramp   best w
+#   0-1h        0.65       1.00        0.65          0.05
+#   1-3h        0.81       1.00        0.81          0.10
+#   3-5h        1.00       1.00        0.93          0.30
+#   5h+         0.92       1.00        1.00          0.45
+#
+# On lows the local trend BEATS the forecast close in, which is the
+# opposite of the high side and makes sense: the overnight minimum is
+# reached by radiative cooling the station is already measuring, whereas
+# the afternoon peak depends on advection the station cannot see coming.
+# The existing ramp's shape (more NWS as lead grows) is therefore already
+# the right direction here; it only overshoots to 1.0 at long lead where
+# ~0.45 scores better, worth about 0.10F. That is too small a gain on 43
+# checkpoints to justify moving a constant, so it stays.
+
+
+def nws_blend_weight(hours_to_target, start=None, full=None):
     """How much of today's extreme estimate should come from NWS, given how
-    far away the target time is. 0.0 = pure local trend, 1.0 = pure NWS."""
-    if hours_to_target <= NWS_BLEND_START_HOURS:
-        return 0.0
-    if hours_to_target >= NWS_BLEND_FULL_HOURS:
+    far away the target time is. 0.0 = pure local trend, 1.0 = pure NWS.
+
+    start/full default to the low-side constants; the high side passes its
+    own. Ordered full-first so a degenerate start == full pair (the high
+    side's, both 0) resolves to 1.0 rather than dividing by a zero span.
+    """
+    start = NWS_BLEND_START_HOURS if start is None else start
+    full = NWS_BLEND_FULL_HOURS if full is None else full
+    if hours_to_target >= full:
         return 1.0
-    span = NWS_BLEND_FULL_HOURS - NWS_BLEND_START_HOURS
-    return (hours_to_target - NWS_BLEND_START_HOURS) / span
+    if hours_to_target <= start:
+        return 0.0
+    return (hours_to_target - start) / (full - start)
 
 
-def blend_toward_nws(trend_value, nws_value, hours_to_target):
+def blend_toward_nws(trend_value, nws_value, hours_to_target, start=None, full=None):
     """Returns (blended_value, weight_actually_applied).
 
     Weight is 0.0 when there is no NWS value to blend with, so a forecast
@@ -1030,7 +1097,7 @@ def blend_toward_nws(trend_value, nws_value, hours_to_target):
     """
     if nws_value is None:
         return trend_value, 0.0
-    w = nws_blend_weight(hours_to_target)
+    w = nws_blend_weight(hours_to_target, start=start, full=full)
     return (1.0 - w) * trend_value + w * float(nws_value), w
 
 
@@ -1473,6 +1540,7 @@ def estimate_daily_extremes(station_id, obs_limit=8):
             nws_high_forecast_daily_f if nws_high_forecast_daily_f is not None
             else nws_high_forecast_at_target_f,
             peak_today - hour,  # true lead time, not the capped trend horizon
+            start=NWS_BLEND_START_HOURS_HIGH, full=NWS_BLEND_FULL_HOURS_HIGH,
         )
         # The observed-so-far clamp survives the blend: today's high cannot
         # be below a temperature already recorded today, whatever any
