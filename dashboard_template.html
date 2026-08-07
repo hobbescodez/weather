@@ -89,11 +89,17 @@
   .scene[data-sky^="day"] .wide:not(.glass) {
     background: var(--glass-bg);
     border: 1px solid var(--glass-border);
-    border-radius: 20px;
-    padding: 18px 20px;
+    border-radius: 28px;
+    padding: 22px 24px;
     backdrop-filter: blur(24px) saturate(150%);
     -webkit-backdrop-filter: blur(24px) saturate(150%);
+    box-shadow:
+      0 10px 30px rgba(0, 0, 0, 0.18),
+      0 2px 8px rgba(0, 0, 0, 0.10),
+      inset 0 1px 0 rgba(255, 255, 255, 0.16);
   }
+  /* The hero carries the page, so it gets more room than a data card. */
+  .scene[data-sky^="day"] .hero { padding: 26px 24px 24px; }
 
   .scene::before {
     content: "";
@@ -239,33 +245,110 @@
   }
 
   .hero { text-align: center; }
-  .hero-condition {
-    font-size: 17px;
-    font-weight: 400;
-    color: var(--text-soft);
+
+  /* The focal point. Sized in vw so it stays dominant on a phone (where
+     this is mostly read) without swelling absurdly on a desktop. */
+  .hero-icon {
+    width: clamp(104px, 30vw, 148px);
+    height: clamp(104px, 30vw, 148px);
+    display: block;
+    margin: 0 auto -6px;
+    overflow: visible;
+    filter: drop-shadow(0 6px 16px rgba(0, 0, 0, 0.28));
   }
+  .hero-sun-core { fill: var(--accent-warm); }
+  .hero-sun-rays {
+    fill: none;
+    stroke: var(--accent-warm);
+    stroke-width: 5;
+    stroke-linecap: round;
+    /* 8 rays from one circle: dashes on, long gaps off. */
+    stroke-dasharray: 0.5 14.2;
+    transform-origin: 34px 34px;
+  }
+  .hero-moon-body { fill: #f4f1e4; }
+  .hero-cloud path { fill: #fff; }
+  .hero-cloud-back path { opacity: 0.72; }
+  .hero-cloud-front path { opacity: 0.95; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .hero-sun-rays { animation: hero-spin 44s linear infinite; }
+    .hero-sun-core { animation: hero-pulse 5.5s ease-in-out infinite; }
+    .hero-moon { animation: hero-pulse 7s ease-in-out infinite; }
+    /* The two puffs drift at different rates, which reads as depth
+       rather than one rigid glyph sliding around. */
+    .hero-cloud-back { animation: hero-drift 13s ease-in-out infinite; }
+    .hero-cloud-front { animation: hero-drift 9s ease-in-out infinite reverse; }
+  }
+  @keyframes hero-spin { to { transform: rotate(360deg); } }
+  @keyframes hero-pulse {
+    0%, 100% { opacity: 0.92; transform: scale(1); }
+    50%      { opacity: 1;    transform: scale(1.045); }
+  }
+  @keyframes hero-drift {
+    0%, 100% { transform: translateX(0); }
+    50%      { transform: translateX(3.5px); }
+  }
+
+  .hero-condition {
+    font-size: 15px;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+  }
+  /* Rounded-first stack, and a hair of optical negative tracking so the
+     big number reads as one shape. The weight contrast with everything
+     around it (200 here, 500-600 elsewhere) is what makes the hierarchy,
+     not size alone. */
   .hero-temp {
-    font-size: clamp(84px, 25vw, 116px);
+    font-family: ui-rounded, "SF Pro Rounded", "Hiragino Maru Gothic ProN",
+                 "Quicksand", "Nunito", -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: clamp(92px, 27vw, 132px);
     font-weight: 200;
-    line-height: 0.95;
-    letter-spacing: -2px;
+    line-height: 0.92;
+    letter-spacing: -3px;
     font-variant-numeric: tabular-nums;
+    text-shadow: 0 4px 22px rgba(0, 0, 0, 0.25);
   }
   .hero-temp sup {
-    font-size: 0.3em;
-    font-weight: 300;
-    top: -0.65em;
+    font-size: 0.26em;
+    font-weight: 400;
+    top: -0.85em;
+    letter-spacing: 0;
+    color: var(--text-soft);
   }
+  /* Page is regenerated hourly, so "the temp changed" is a fresh load
+     rather than a DOM update - the entrance fade IS the update
+     transition. Cheap, and it degrades to nothing under reduced-motion. */
+  @media (prefers-reduced-motion: no-preference) {
+    .hero-temp { animation: hero-temp-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) both; }
+    .hero-icon { animation: hero-icon-in 0.8s cubic-bezier(0.22, 1, 0.36, 1) both; }
+  }
+  @keyframes hero-temp-in {
+    from { opacity: 0; transform: translateY(10px) scale(0.97); }
+    to   { opacity: 1; transform: none; }
+  }
+  @keyframes hero-icon-in {
+    from { opacity: 0; transform: translateY(-8px) scale(0.9); }
+    to   { opacity: 1; transform: none; }
+  }
+
   .hero-hilo {
-    margin-top: 4px;
-    display: flex;
+    margin-top: 10px;
+    display: inline-flex;
     justify-content: center;
-    gap: 16px;
-    font-size: 16px;
+    gap: 8px;
+    font-size: 15px;
     font-weight: 500;
     font-variant-numeric: tabular-nums;
     color: var(--text-strong);
+    padding: 7px 16px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.14);
+    border: 1px solid var(--glass-border);
   }
+  .hero-hilo span { display: inline-flex; align-items: baseline; gap: 5px; }
   .hilo-arrow-high { color: var(--accent-warm); }
   .hilo-arrow-low { color: var(--text-soft); }
   .dot-warm {
@@ -278,13 +361,21 @@
     vertical-align: middle;
   }
 
+  /* Depth rather than a flat fill: an outer drop shadow to lift the card
+     off the sky, plus a 1px inset highlight along the top edge, which is
+     what makes a translucent panel read as a physical pane instead of a
+     rectangle of paint. */
   .glass {
     background: var(--glass-bg);
     border: 1px solid var(--glass-border);
-    border-radius: 20px;
-    padding: 18px 20px;
+    border-radius: 28px;
+    padding: 22px 24px;
     backdrop-filter: blur(24px) saturate(150%);
     -webkit-backdrop-filter: blur(24px) saturate(150%);
+    box-shadow:
+      0 10px 30px rgba(0, 0, 0, 0.18),
+      0 2px 8px rgba(0, 0, 0, 0.10),
+      inset 0 1px 0 rgba(255, 255, 255, 0.16);
   }
 
   .module-label {
@@ -689,6 +780,7 @@
     </div>
 
     <div class="hero">
+      {{hero_icon_svg}}
       <div class="hero-condition">{{condition_text}}</div>
       <div class="hero-temp">{{current_temp}}<sup>°F</sup></div>
       <!-- Plain language, not notation, and empty (so hidden) whenever the

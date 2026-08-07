@@ -216,6 +216,70 @@ def build_cloud_icon_svg(cloud_pct):
 </svg>""".strip()
 
 
+def build_hero_icon_svg(cloud_fraction, is_day):
+    """The big animated weather glyph at the top of the page.
+
+    Drawn inline rather than pulled from an icon set. Two reasons, both
+    hard constraints rather than preference: the published Artifact runs
+    under a CSP that blocks every external host, so a CDN-hosted set
+    cannot load at all, and vendoring one would mean carrying a
+    third-party licence and its files in a repo whose whole output is a
+    single self-contained HTML file.
+
+    Picks its parts from the same cloud_fraction/is_day the background
+    gradient and condition text already use (see sky_condition), so the
+    icon can never disagree with the words next to it. Animation is pure
+    CSS on the classes below - a static generated page has no JS to drive
+    anything, and transform/opacity keyframes composite on the GPU
+    without triggering layout.
+    """
+    c = cloud_fraction if cloud_fraction is not None else 0.0
+    parts = []
+
+    if is_day:
+        # Sun. Rays are a single dasharray circle rather than 8 <line>s -
+        # same picture, one element to rotate.
+        parts.append(
+            '<g class="hero-sun">'
+            '<circle cx="34" cy="34" r="12" class="hero-sun-core" />'
+            '<circle cx="34" cy="34" r="20" class="hero-sun-rays" />'
+            "</g>"
+        )
+    else:
+        # Crescent via an offset mask, so it stays one shape at any size.
+        parts.append(
+            '<defs><mask id="hero-moon-mask">'
+            '<rect width="100" height="100" fill="#fff" />'
+            '<circle cx="42" cy="26" r="14" fill="#000" />'
+            "</mask></defs>"
+            '<g class="hero-moon"><circle cx="34" cy="34" r="15" '
+            'mask="url(#hero-moon-mask)" class="hero-moon-body" /></g>'
+        )
+
+    # Cloud only appears once there is meaningfully some, and the second
+    # (front) puff only for genuinely overcast skies - so the glyph tracks
+    # the same three bands sky_condition labels.
+    if c > 0.15:
+        parts.append(
+            '<g class="hero-cloud hero-cloud-back">'
+            '<path d="M30 66h34a11 11 0 0 0 0-22 15 15 0 0 0-28-5 10 10 0 0 0-6 27z" />'
+            "</g>"
+        )
+    if c > 0.5:
+        parts.append(
+            '<g class="hero-cloud hero-cloud-front">'
+            '<path d="M22 76h40a10 10 0 0 0 0-20 13 13 0 0 0-25-4 9 9 0 0 0-15 24z" />'
+            "</g>"
+        )
+
+    label = sky_condition(cloud_fraction, is_day)[0]
+    return (
+        f'<svg viewBox="0 0 100 100" class="hero-icon" role="img" aria-label="{label}">'
+        + "".join(parts)
+        + "</svg>"
+    )
+
+
 def _fmt_dt_short(iso_str):
     if iso_str is None:
         return "—"
@@ -1229,6 +1293,7 @@ def main():
         "fremont_forecast_low_time": _fmt_time(fremont_forecast_low_time) if fremont_forecast_low_time is not None else "—",
         "sky_class": sky_class,
         "condition_text": condition_text,
+        "hero_icon_svg": build_hero_icon_svg(cloud_pct, is_day),
         "obs_json_url": obs_json_url,
         "obhistory_url": obhistory_url,
         "forecast_url": forecast_url,
