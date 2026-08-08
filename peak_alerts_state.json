@@ -647,6 +647,24 @@
       "message": null,
       "confidence_at_send": null,
       "skipped_missed_window": false
+    },
+    "high": {
+      "predicted_peak_time_at_lock": "2026-08-08T16:09:00-07:00",
+      "window_start": "2026-08-08T15:09:00-07:00",
+      "hard_cutoff": "2026-08-08T15:49:00-07:00",
+      "checkpoints": [
+        "2026-08-08T15:09:00-07:00",
+        "2026-08-08T15:19:00-07:00",
+        "2026-08-08T15:29:00-07:00",
+        "2026-08-08T15:39:00-07:00",
+        "2026-08-08T15:49:00-07:00"
+      ],
+      "locked_at": "2026-08-08T00:05:00-07:00",
+      "sent": false,
+      "sent_at": null,
+      "message": null,
+      "confidence_at_send": null,
+      "skipped_missed_window": false
     }
   }
 }
