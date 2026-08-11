@@ -260,10 +260,18 @@
   .hero-sun-rays {
     fill: none;
     stroke: var(--accent-warm);
-    stroke-width: 5;
-    stroke-linecap: round;
-    /* 8 rays from one circle: dashes on, long gaps off. */
-    stroke-dasharray: 0.5 14.2;
+    /* stroke-width is the ray's RADIAL length (the annulus thickness);
+       the dash is its TANGENTIAL width. The two together decide whether
+       this reads as a ray or a dot, so they have to be set as a pair:
+       9 long x 2.6 wide is a spoke, and the previous 5 x 0.5 was not -
+       with round caps a 0.5 dash inflates to a 5px circle, i.e. exactly
+       stroke-width across in both directions, which drew eight dots. */
+    stroke-width: 9;
+    stroke-linecap: butt;
+    /* 8 rays from one circle: circumference 2*pi*20 = 125.66, so the
+       period is 15.708 and dash + gap must sum to it or the rays drift
+       out of alignment as the ring rotates. */
+    stroke-dasharray: 2.6 13.108;
     transform-origin: 34px 34px;
   }
   .hero-moon-body { fill: #f4f1e4; }

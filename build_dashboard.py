@@ -107,7 +107,7 @@ def build_sparkline_svg(times, temps, est_time, est_temp, width=640, height=160)
     est_label_y = max(est_pt[1] - 14, 12)
 
     return f"""
-<svg viewBox="0 0 {width} {height}" class="sparkline" preserveAspectRatio="none" role="img" aria-label="Temperature trend, last {SPARKLINE_HOURS} hours and projected estimate">
+<svg viewBox="0 0 {width} {height}" class="sparkline" role="img" aria-label="Temperature trend, last {SPARKLINE_HOURS} hours and projected estimate">
   <path d="{area_path}" class="spark-area" />
   <path d="{line_path}" class="spark-line" />
   <path d="{proj_path}" class="spark-proj" />
@@ -189,22 +189,26 @@ def build_metric_chart_svg(times, values, unit, decimals, aria, width=640, heigh
         '<path d="M ' + " L ".join(f"{x:.1f},{y:.1f}" for x, y in r) + '" class="spark-line" />'
         for r in runs
     )
-    # Area under the longest run only - shading every fragment of a gappy
-    # series reads as noise rather than as one trend.
-    area = ""
-    if runs:
-        big = max(runs, key=len)
-        area = (
-            '<path d="M ' + " L ".join(f"{x:.1f},{y:.1f}" for x, y in big)
-            + f' L {big[-1][0]:.1f},{height - pad_bottom} L {big[0][0]:.1f},{height - pad_bottom} Z"'
-            ' class="spark-area" />'
-        )
+    # Every run gets its area, not just the longest. Shading one run and
+    # leaving the others as bare lines doesn't read as "this run is the
+    # important one" - it reads as the fill having failed to render, which
+    # is exactly how cloud cover (the gappiest series) looked.
+    area = "".join(
+        '<path d="M ' + " L ".join(f"{x:.1f},{y:.1f}" for x, y in r)
+        + f' L {r[-1][0]:.1f},{height - pad_bottom} L {r[0][0]:.1f},{height - pad_bottom} Z"'
+        ' class="spark-area" />'
+        for r in runs
+    )
 
     last_x, last_y = xy(*present[-1])
     last_v = present[-1][1]
-    label_y = max(last_y - 12, 14)
+    # Clear the dot's own radius plus the stroke, then keep the text inside
+    # the top pad. 12 put the baseline within a few px of the line itself,
+    # so on a series that ends climbing (wind, most afternoons) the label
+    # sat on top of the data.
+    label_y = min(max(last_y - 16, 13), height - pad_bottom - 4)
     return f"""
-<svg viewBox="0 0 {width} {height}" class="sparkline" preserveAspectRatio="none" role="img" aria-label="{aria}, last {SPARKLINE_HOURS} hours">
+<svg viewBox="0 0 {width} {height}" class="sparkline" role="img" aria-label="{aria}, last {SPARKLINE_HOURS} hours">
   {area}
   {lines}
   <circle cx="{last_x:.1f}" cy="{last_y:.1f}" r="4" class="spark-now-dot" />
@@ -405,9 +409,24 @@ def build_hero_icon_svg(cloud_fraction, is_day):
             "</g>"
         )
 
+    # Crop the viewBox to whatever was actually drawn. The parts are laid
+    # out on a fixed 100x100 grid so the sun and the clouds keep their
+    # relative positions, but a clear-sky glyph only occupies the top-left
+    # of that grid - shipping the full square left ~40% of the element as
+    # empty space below the sun, which the layout then dutifully reserved
+    # and which read as the icon floating too high in the card.
+    if c > 0.5:
+        view_box = "6 6 74 74"      # sun/moon + both puffs
+    elif c > 0.15:
+        view_box = "6 6 72 72"      # sun/moon + back puff
+    elif is_day:
+        view_box = "8 8 52 52"      # sun alone: rays reach r=24.5 from (34,34)
+    else:
+        view_box = "16 16 36 36"    # moon alone: body is only r=15
+
     label = sky_condition(cloud_fraction, is_day)[0]
     return (
-        f'<svg viewBox="0 0 100 100" class="hero-icon" role="img" aria-label="{label}">'
+        f'<svg viewBox="{view_box}" class="hero-icon" role="img" aria-label="{label}">'
         + "".join(parts)
         + "</svg>"
     )
@@ -439,13 +458,49 @@ def _format_time_delta(s):
     return txt
 
 
-def build_weekly_performance_table(rows, side):
+def next_day_projection_map(summary):
+    """target_date -> {"high": projection, "low": projection}.
+
+    calibration_log already logs tomorrow_high_f/tomorrow_low_f on every
+    refresh and summarize() already pairs each with the date it was aimed
+    at, so the night-before number needs no new logging - it only needs
+    re-keying from "the day the forecast was made" to "the day it was
+    about", which is what the weekly table is indexed by.
+    """
+    out = {}
+    for d in summary.get("days", []):
+        for side in ("high", "low"):
+            nd = d.get(f"next_day_{side}") or {}
+            target = nd.get("target_date")
+            if target and nd.get("projection") is not None:
+                out.setdefault(target, {})[side] = nd["projection"]
+    return out
+
+
+def build_weekly_performance_table(rows, side, night_before=None):
     """One row per trailing day for a single side (high/low), all spec'd
     fields - wrapped in a horizontally-scrolling container by the
-    template since there are too many columns for a phone-width card."""
+    template since there are too many columns for a phone-width card.
+
+    Two of the columns exist to make the same day readable across lead
+    times and against the official outcome:
+
+    "Night before" is the projection made the previous evening, so the
+    same-day estimate sitting one column to its left can be compared
+    against a genuinely longer-lead call for the identical date.
+
+    "Settled" is the CLI value NWS publishes as the day's official
+    extreme. It is deliberately separate from "Actual": that column falls
+    back to the observation stream while a day is still in progress, and
+    from "Kalshi implied", which is the market's *belief* rather than the
+    outcome. Only the CLI number settles the contract, so a bet that
+    looks like a near miss against the stream can still be a loss here.
+    """
+    night_before = night_before or {}
     header = (
-        "<tr><th>Date</th><th>Predicted</th><th>1h before pred.</th><th>NWS 1h before</th>"
-        "<th>Actual</th><th>1h before actual</th>"
+        "<tr><th>Date</th><th>Predicted</th><th>Night before</th>"
+        "<th>1h before pred.</th><th>NWS 1h before</th>"
+        "<th>Actual</th><th>Settled</th><th>1h before actual</th>"
         "<th>Temp Δ</th><th>Time Δ</th>"
         "<th>Kalshi peak vol.</th><th>Kalshi implied</th></tr>"
     )
@@ -457,7 +512,7 @@ def build_weekly_performance_table(rows, side):
         s = r.get(side)
         date_label = r["date"][5:]  # MM-DD is plenty given the 7-day window
         if not s:
-            body.append(f'<tr><td>{date_label}</td><td colspan="9" class="perf-nodata">no data</td></tr>')
+            body.append(f'<tr><td>{date_label}</td><td colspan="11" class="perf-nodata">no data</td></tr>')
             continue
 
         if s.get("data_quality_flag"):
@@ -481,13 +536,39 @@ def build_weekly_performance_table(rows, side):
         nws_1hr_before = (
             f"{_fmt_num(s['nws_forecast_temp'])}°" if s.get("nws_forecast_temp") is not None else "—"
         )
+        # Night-before projection for *this* date, plus its own error against
+        # the settled value - the error is the whole point of the column, and
+        # recomputing it here keeps it consistent with the settled number in
+        # the next cell rather than with whatever "Actual" fell back to.
+        nb_val = (night_before.get(r["date"]) or {}).get(side)
+        settled_val = s.get("actual_peak_temp_cli_f")
+        if nb_val is None:
+            night_before_cell = "—"
+        elif settled_val is None:
+            night_before_cell = f"{_fmt_num(nb_val)}°"
+        else:
+            nb_err = nb_val - settled_val
+            cls = "perf-err-good" if abs(nb_err) <= 1.5 else "perf-err-bad"
+            night_before_cell = (
+                f"{_fmt_num(nb_val)}° "
+                f'<span class="perf-subtle {cls}">({nb_err:+.1f})</span>'
+            )
+        # Blank rather than 0 while the day is unsettled: CLI lands the
+        # following morning, so an in-progress day genuinely has no official
+        # outcome yet and printing one would be a fabrication.
+        settled_cell = (
+            f"<strong>{_fmt_num(settled_val)}°</strong>" if settled_val is not None
+            else '<span class="perf-pending">pending</span>'
+        )
         body.append(
             "<tr>"
             f"<td>{date_label}{flag}</td>"
             f"<td>{predicted}</td>"
+            f"<td>{night_before_cell}</td>"
             f"<td>{_fmt_num(s['temp_1hr_before_predicted_peak'])}°</td>"
             f"<td>{nws_1hr_before}</td>"
             f"<td>{actual}</td>"
+            f"<td>{settled_cell}</td>"
             f"<td>{_fmt_num(s['temp_1hr_before_actual_peak'])}°</td>"
             f"<td>{_fmt_num(s['peak_temp_error_f'], 2, sign=True) if s['peak_temp_error_f'] is not None else '—'}</td>"
             f"<td>{_format_time_delta(s)}</td>"
@@ -1019,6 +1100,17 @@ def main():
     weekly_perf = weekly_table(STATION, days=7)
     monthly_perf = monthly_rollup(STATION, now.year, now.month)
 
+    # One summarize() for both the next-day table and the weekly tables'
+    # night-before column. Degrading to an empty map rather than raising
+    # keeps a calibration-log problem from taking down the whole page: the
+    # weekly tables still render, just with "—" in that one column.
+    try:
+        _calib_summary = summarize()
+    except Exception as e:
+        print(f"calibration_log: summarize() failed, night-before column empty: {e}")
+        _calib_summary = {"days": []}
+    _night_before = next_day_projection_map(_calib_summary)
+
     # Kalshi's KSEA markets are dated by Seattle's own calendar day, not
     # the system clock's - this container runs on UTC, which is already
     # into the next day while it's still evening in Seattle (UTC-7/8).
@@ -1399,9 +1491,11 @@ def main():
         "tomorrow_low_volume_svg": build_volume_bars_svg(tomorrow_low_volume["hourly"], now.tzinfo) if tomorrow_low_volume else '<div class="hint">Volume unavailable.</div>',
         "weekly_days_with_data": weekly_perf["days_with_data"],
         "weekly_days_requested": weekly_perf["days_requested"],
-        "next_day_table": build_next_day_table(summarize()),
-        "weekly_high_table": build_weekly_performance_table(weekly_perf["rows"], "high"),
-        "weekly_low_table": build_weekly_performance_table(weekly_perf["rows"], "low"),
+        "next_day_table": build_next_day_table(_calib_summary),
+        "weekly_high_table": build_weekly_performance_table(
+            weekly_perf["rows"], "high", _night_before),
+        "weekly_low_table": build_weekly_performance_table(
+            weekly_perf["rows"], "low", _night_before),
         "monthly_label": now.strftime("%B %Y"),
         "monthly_low_sample_note": (
             f'<div class="hint">Only {monthly_perf["days_with_data"]} day(s) finalized so far this month - treat these as low-sample, not a stable average.</div>'
