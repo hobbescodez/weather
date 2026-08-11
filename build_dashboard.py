@@ -489,18 +489,21 @@ def build_weekly_performance_table(rows, side, night_before=None):
     same-day estimate sitting one column to its left can be compared
     against a genuinely longer-lead call for the identical date.
 
-    "Settled" is the CLI value NWS publishes as the day's official
-    extreme. It is deliberately separate from "Actual": that column falls
-    back to the observation stream while a day is still in progress, and
-    from "Kalshi implied", which is the market's *belief* rather than the
-    outcome. Only the CLI number settles the contract, so a bet that
-    looks like a near miss against the stream can still be a loss here.
+    There is deliberately no separate "settled" column. finalize_day
+    already adopts the CLI value as actual_peak_temp the moment CLI
+    publishes, so on any finalized row the two are the same number by
+    construction and a second column would only ever restate the first.
+    What does vary is the *provenance*, so "Actual" is marked instead on
+    the rows where it is not the official settled figure - which is the
+    case a reader actually needs flagged, since only the CLI integer
+    settles a contract and the stream can sit most of a degree away from
+    it (2026-08-08's low: 57.2 streamed, 58 settled).
     """
     night_before = night_before or {}
     header = (
         "<tr><th>Date</th><th>Predicted</th><th>Night before</th>"
         "<th>1h before pred.</th><th>NWS 1h before</th>"
-        "<th>Actual</th><th>Settled</th><th>1h before actual</th>"
+        "<th>Actual</th><th>1h before actual</th>"
         "<th>Temp Δ</th><th>Time Δ</th>"
         "<th>Kalshi peak vol.</th><th>Kalshi implied</th></tr>"
     )
@@ -512,7 +515,7 @@ def build_weekly_performance_table(rows, side, night_before=None):
         s = r.get(side)
         date_label = r["date"][5:]  # MM-DD is plenty given the 7-day window
         if not s:
-            body.append(f'<tr><td>{date_label}</td><td colspan="11" class="perf-nodata">no data</td></tr>')
+            body.append(f'<tr><td>{date_label}</td><td colspan="10" class="perf-nodata">no data</td></tr>')
             continue
 
         if s.get("data_quality_flag"):
@@ -553,13 +556,11 @@ def build_weekly_performance_table(rows, side, night_before=None):
                 f"{_fmt_num(nb_val)}° "
                 f'<span class="perf-subtle {cls}">({nb_err:+.1f})</span>'
             )
-        # Blank rather than 0 while the day is unsettled: CLI lands the
-        # following morning, so an in-progress day genuinely has no official
-        # outcome yet and printing one would be a fabrication.
-        settled_cell = (
-            f"<strong>{_fmt_num(settled_val)}°</strong>" if settled_val is not None
-            else '<span class="perf-pending">pending</span>'
-        )
+        # Mark the actual only when it is NOT the settled CLI figure, so the
+        # unmarked majority reads as "official" and the eye goes to the rows
+        # where the number could still move.
+        if settled_val is None:
+            actual += ' <span class="perf-subtle" title="No CLI report yet - this is the observation stream, which can differ from the settled value">(unsettled)</span>'
         body.append(
             "<tr>"
             f"<td>{date_label}{flag}</td>"
@@ -568,7 +569,6 @@ def build_weekly_performance_table(rows, side, night_before=None):
             f"<td>{_fmt_num(s['temp_1hr_before_predicted_peak'])}°</td>"
             f"<td>{nws_1hr_before}</td>"
             f"<td>{actual}</td>"
-            f"<td>{settled_cell}</td>"
             f"<td>{_fmt_num(s['temp_1hr_before_actual_peak'])}°</td>"
             f"<td>{_fmt_num(s['peak_temp_error_f'], 2, sign=True) if s['peak_temp_error_f'] is not None else '—'}</td>"
             f"<td>{_format_time_delta(s)}</td>"
@@ -621,7 +621,17 @@ def build_monthly_stats_rows(stats):
     if stats["mean_kalshi_peak_volume_contracts"] is not None:
         rows.append(row("Mean Kalshi peak volume", f"{stats['mean_kalshi_peak_volume_contracts']:,.0f} contracts"))
     if stats["model_in_kalshi_bracket_rate"] is not None:
-        rows.append(row("Model in Kalshi's top bracket", f"{stats['model_in_kalshi_bracket_rate'] * 100:.0f}% ({stats['n_hit_samples']} days)"))
+        # Named for the exact bracket it tests. The weekly table's "Kalshi
+        # implied" column is the market's favourite at the *actual peak*,
+        # this is its favourite at the moment the model committed - they
+        # disagree on real days, so a reader comparing the two by eye gets
+        # a mismatch that looks like a bug in one of them. It is also
+        # model-vs-market agreement, not market accuracy: whether the
+        # settled value landed in the market's bracket is a different
+        # question with a much higher rate.
+        rows.append(row(
+            "Model agreed w/ Kalshi favourite <span class=\"perf-subtle\">(at prediction time)</span>",
+            f"{stats['model_in_kalshi_bracket_rate'] * 100:.0f}% ({stats['n_hit_samples']} days)"))
     if stats["n_temp_error_samples"] == 0:
         rows.append('<div class="hint">No model predictions logged yet this month - calibration_log.py only started capturing pre-peak predictions recently.</div>')
     return "\n".join(rows)
