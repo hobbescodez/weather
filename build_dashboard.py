@@ -16,6 +16,7 @@ Run standalone to regenerate the dashboard:
 import json
 import os
 from datetime import date, datetime, timedelta
+from html.parser import HTMLParser
 
 import pandas as pd
 
@@ -1052,6 +1053,116 @@ def sky_condition(cloud_fraction, is_day):
     return ("Cloudy", "day-cloudy" if is_day else "night-cloudy")
 
 
+# Elements that never get a closing tag, so they must not move the nesting
+# depth while we walk the document.
+_VOID_TAGS = frozenset(
+    "area base br col embed hr img input link meta param source track wbr".split()
+)
+
+
+class _ContentChildren(HTMLParser):
+    """Collect the direct children of <div class="content">.
+
+    Only the top level matters: those are the grid items. For each one we
+    record its classes and whether it contains a .perf-scroll anywhere
+    inside, since that is what the CSS keys full width off.
+    """
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.in_content = False
+        self.depth = 0
+        self.children = []
+        self._cur = None
+
+    def handle_startendtag(self, tag, attrs):
+        # <line ... /> and friends inside the SVGs: self-closing, so they
+        # neither open a child nor change depth.
+        if self.in_content and self._cur is not None:
+            if "perf-scroll" in (dict(attrs).get("class") or "").split():
+                self._cur["perf"] = True
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _VOID_TAGS:
+            return
+        classes = (dict(attrs).get("class") or "").split()
+        if not self.in_content:
+            if tag == "div" and "content" in classes:
+                self.in_content = True
+                self.depth = 0
+            return
+        if self.depth == 0:
+            self._cur = {"classes": classes, "perf": False}
+            self.children.append(self._cur)
+        elif self._cur is not None and "perf-scroll" in classes:
+            self._cur["perf"] = True
+        self.depth += 1
+
+    def handle_endtag(self, tag):
+        if not self.in_content or tag in _VOID_TAGS:
+            return
+        self.depth -= 1
+        if self.depth <= 0:
+            self._cur = None
+            if self.depth < 0:
+                self.in_content = False
+
+
+def check_panel_layout(html):
+    """Warn when the desktop grid would leave an empty cell beside a panel.
+
+    Above 860px the panels flow in DOM order into two equal columns, and a
+    full-width panel always starts a fresh row. So every run of half-width
+    panels bounded by full-width ones has to be an even count - an odd run
+    leaves its last panel alone in column 1 with a visible hole beside it,
+    which is what put a 673px gap next to the tomorrow's-low volume chart.
+
+    CSS has no selector for "last item in a row", so the invariant cannot
+    live in the stylesheet and is checked here instead. This warns rather
+    than raising: an empty grid cell is cosmetic, and the hourly refresh
+    publishing a slightly gapped dashboard beats it publishing nothing.
+    """
+    parser = _ContentChildren()
+    parser.feed(html)
+    if not parser.children:
+        print("LAYOUT_WARNING: could not find .content children to check")
+        return
+
+    def is_wide(child):
+        cls = child["classes"]
+        return (
+            "wide" in cls
+            or "place" in cls
+            or "hero" in cls
+            or "footer" in cls
+            or child["perf"]  # .glass:has(.perf-scroll)
+        )
+
+    runs, run = [], 0
+    for child in parser.children:
+        if is_wide(child):
+            runs.append(run)
+            run = 0
+        else:
+            run += 1
+    runs.append(run)
+
+    odd = [n for n in runs if n % 2]
+    if odd:
+        print(
+            f"LAYOUT_WARNING: {len(odd)} run(s) of half-width panels have an odd "
+            f"count {odd} - the last panel in each will sit alone in column 1 "
+            f"with an empty cell beside it. Mark that panel .wide (it must be "
+            f"the LAST of the run; widening an earlier one just moves the hole)."
+        )
+    else:
+        n_half = sum(runs)
+        print(
+            f"Panel layout OK: {len(parser.children)} grid items, {n_half} "
+            f"half-width in even runs {[n for n in runs if n]}, no orphan cells."
+        )
+
+
 def main():
     est = estimate_temp(STATION, hours_ahead=HOURS_AHEAD)
     extremes = estimate_daily_extremes(STATION)
@@ -1543,6 +1654,8 @@ def main():
 
     for key, value in ctx.items():
         template = template.replace("{{" + key + "}}", str(value))
+
+    check_panel_layout(template)
 
     default_out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "index.html")
     out_path = os.environ.get("DASHBOARD_OUTPUT_PATH", default_out_path)

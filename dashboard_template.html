@@ -778,10 +778,14 @@
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
   }
+  /* No min-width here on purpose. It used to say 640px, which read like the
+     table's real size but hadn't been true since columns were added: every
+     cell is nowrap, so the table's natural width is ~944px and the 640 floor
+     never bound anything. Letting the cells reflow instead means the table
+     shrinks to its container rather than growing a scrollbar. */
   .perf-table {
     border-collapse: collapse;
     width: 100%;
-    min-width: 640px;
     font-size: 11.5px;
     font-variant-numeric: tabular-nums;
   }
@@ -793,14 +797,24 @@
     text-transform: uppercase;
     color: var(--text-faint);
     padding: 0 10px 8px 0;
-    white-space: nowrap;
+    vertical-align: bottom;
   }
+  /* Nothing here is nowrap, headers included. Measured: with the headers
+     pinned to one line the table could not go below 878px however much the
+     body cells reflowed - labels like "1h before actual" and "Kalshi peak
+     vol." were setting the floor by themselves. Letting them wrap to two
+     lines brings the natural width to 798px, which is what actually fits a
+     laptop. Body values like "4:53pm · 74.0°" break at the separator,
+     never mid-number. */
   .perf-table td {
     padding: 6px 10px 6px 0;
     color: var(--text-soft);
     border-top: 1px solid var(--glass-line);
-    white-space: nowrap;
   }
+  /* The one exception to the wrapping: a date is a single token and
+     "08-10" broken across two lines at its hyphen reads as two numbers.
+     Costs ~8px of min-content width, which never binds. */
+  .perf-table td:first-child { white-space: nowrap; }
   .perf-table tr:first-child td { border-top: none; }
   .perf-err-good { color: var(--text-strong); }
   .perf-err-bad { color: var(--accent-warm-soft); font-weight: 600; }
@@ -847,6 +861,17 @@
       align-items: start;
     }
     .place, .hero, .footer, .wide {
+      grid-column: 1 / -1;
+    }
+
+    /* Derived, not hand-applied. Every panel holding a performance table is
+       full-width by construction, so the width can't be lost the way it was
+       on the weekly-high panel: that one was correctly marked .wide, and a
+       later commit rewrote its opening tag to add `open` and dropped `wide`
+       off the same line. Nothing about that edit looked like a layout
+       change, which is exactly why it survived review. A table panel now
+       gets its width from containing a table. */
+    .glass:has(.perf-scroll) {
       grid-column: 1 / -1;
     }
   }
@@ -1065,7 +1090,15 @@
       <div class="kalshi-ticker">{{kalshi_tomorrow_low_ticker}}</div>
     </div>
 
-    <details class="glass">
+    <!-- Deliberately wide, and it has to be THIS panel: it is the last of the
+         run of half-width cards, and that run is otherwise an odd count, so
+         this card would sit alone in column 1 with an empty cell beside it.
+         Widening any earlier card just moves the hole. CSS has no selector
+         for "last item in a row", so the invariant is enforced at build time
+         instead - see check_panel_layout() in build_dashboard.py. Widening
+         this one also happens to suit it: 24 hourly labels are cramped at
+         half width. -->
+    <details class="glass wide">
       <summary class="module-label">Kalshi · tomorrow's low market volume</summary>
       <div class="estimate-row">
         <span class="estimate-value">{{tomorrow_low_volume_total}}</span>
