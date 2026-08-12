@@ -51,7 +51,14 @@ from kalshi import (
 )
 from nws_climate import fetch_recent_cli_finals
 from observation_precision import settlement_band, extreme_time_window
-from paper_trading import resolve_paper_trade, resolve_unconditional_low_bet, LEAD_TIME_HINTS
+from paper_trading import (
+    resolve_paper_trade,
+    resolve_unconditional_bet,
+    resolve_advance_bet,
+    LEAD_TIME_HINTS,
+    ADVANCE_CASHED_OUT,
+    ADVANCE_HELD,
+)
 import requests
 
 LOG_PATH = os.path.join(os.path.dirname(__file__), "daily_performance.jsonl")
@@ -363,16 +370,21 @@ def _finalize_side(station_id, day, side, actuals, prediction, series_ticker, tz
         # paper_trade_unconditional below for the low market's separate,
         # non-edge-gated strategy.
         "paper_trades": {lt: None for lt in LEAD_TIME_HINTS},
-        # Low market only (see paper_trading.py's module docstring on why
-        # high never gets this): the unconditional, always-bet-the-model's-
-        # point-estimate strategy, fired at the same ~1hr-before-low moment
-        # as "1hr" above but never pooled with it - kept as its own field,
-        # with its own trigger_type, precisely so the two decision rules
-        # can be compared rather than blended into one win-rate number.
-        # Stays None for the high side, and for low on any day the bet
-        # wasn't placed (market unavailable, or the chosen bracket had no
-        # live price).
+        # The unconditional, always-bet-the-model's-point-estimate
+        # strategy, fired at the same ~1hr-before-peak moment as "1hr"
+        # above but never pooled with it - kept as its own field, with
+        # its own trigger_type, precisely so the two decision rules can
+        # be compared rather than blended into one win-rate number.
+        # Both sides carry it as of 2026-08-12 (it was low-only before);
+        # stays None on any day/side the bet wasn't placed.
         "paper_trade_unconditional": None,
+        # The next-day advance position: bought at the ask the day
+        # before, then either sold at the bid before the weather
+        # happened or carried into settlement. Its "status" field
+        # (cashed_out vs held_to_resolution) is what keeps those two
+        # outcomes from ever being added together downstream - see
+        # _strategy_stats and paper_trading.py's module docstring.
+        "paper_trade_next_day_advance": None,
     }
 
     # When CLI is available it IS the settlement value, exact, so no band
@@ -408,24 +420,59 @@ def _finalize_side(station_id, day, side, actuals, prediction, series_ticker, tz
             "within_uncertainty_band": resolved_bet.get("within_uncertainty_band"),
         }
 
-    if side == "low":
-        resolved_unconditional = resolve_unconditional_low_bet(
-            day.isoformat(), actual_temp, settlement_uncertainty
-        )
-        if resolved_unconditional is not None:
-            record["paper_trade_unconditional"] = {
-                "trigger_type": resolved_unconditional["trigger_type"],
-                "simulated_bucket_chosen": resolved_unconditional["simulated_bucket_chosen"],
-                "simulated_entry_price": resolved_unconditional["simulated_entry_price"],
-                "simulated_stake": resolved_unconditional["simulated_stake"],
-                "model_implied_probability": resolved_unconditional["model_implied_probability"],
-                "market_implied_probability": resolved_unconditional["market_implied_probability"],
-                "edge_at_entry": resolved_unconditional.get("edge_at_entry"),
-                "outcome_bucket": resolved_unconditional["outcome_bucket"],
-                "hit": resolved_unconditional["hit"],
-                "simulated_payout": resolved_unconditional["simulated_payout"],
-                "within_uncertainty_band": resolved_unconditional.get("within_uncertainty_band"),
-            }
+    resolved_unconditional = resolve_unconditional_bet(
+        day.isoformat(), side, actual_temp, settlement_uncertainty
+    )
+    if resolved_unconditional is not None:
+        record["paper_trade_unconditional"] = {
+            "trigger_type": resolved_unconditional["trigger_type"],
+            "simulated_bucket_chosen": resolved_unconditional["simulated_bucket_chosen"],
+            "simulated_entry_price": resolved_unconditional["simulated_entry_price"],
+            "simulated_stake": resolved_unconditional["simulated_stake"],
+            "model_implied_probability": resolved_unconditional["model_implied_probability"],
+            "market_implied_probability": resolved_unconditional["market_implied_probability"],
+            "edge_at_entry": resolved_unconditional.get("edge_at_entry"),
+            "outcome_bucket": resolved_unconditional["outcome_bucket"],
+            "hit": resolved_unconditional["hit"],
+            "simulated_payout": resolved_unconditional["simulated_payout"],
+            "within_uncertainty_band": resolved_unconditional.get("within_uncertainty_band"),
+        }
+
+    # Advance position. Both endings are stored in the same field but
+    # are never interchangeable: a cashed-out position carries
+    # realized_gain and no hit/outcome_bucket (it never reached
+    # settlement, so there is no forecast to score), while a held one
+    # carries the usual hit/simulated_payout and no exit price.
+    resolved_advance = resolve_advance_bet(
+        day.isoformat(), side, actual_temp, settlement_uncertainty
+    )
+    if resolved_advance is not None:
+        record["paper_trade_next_day_advance"] = {
+            "strategy": resolved_advance.get("strategy"),
+            "status": resolved_advance.get("status"),
+            "simulated_bucket_chosen": resolved_advance["simulated_bucket_chosen"],
+            "simulated_entry_price": resolved_advance["simulated_entry_price"],
+            "entry_ask": resolved_advance.get("entry_ask"),
+            "entry_bid": resolved_advance.get("entry_bid"),
+            "entry_spread": resolved_advance.get("entry_spread"),
+            "simulated_stake": resolved_advance["simulated_stake"],
+            "point_estimate_f": resolved_advance.get("point_estimate_f"),
+            "projection_source": resolved_advance.get("projection_source"),
+            "opened_at": resolved_advance.get("opened_at"),
+            "n_price_checks": len(resolved_advance.get("price_checks") or []),
+            "best_bid_seen": resolved_advance.get("best_bid_seen"),
+            "best_bid_seen_at": resolved_advance.get("best_bid_seen_at"),
+            # Cash-out leg (None when held to settlement)
+            "exit_price": resolved_advance.get("exit_price"),
+            "exit_at": resolved_advance.get("exit_at"),
+            "hours_held": resolved_advance.get("hours_held"),
+            "realized_gain": resolved_advance.get("realized_gain"),
+            # Settlement leg (None when cashed out early)
+            "outcome_bucket": resolved_advance.get("outcome_bucket"),
+            "hit": resolved_advance.get("hit"),
+            "simulated_payout": resolved_advance.get("simulated_payout"),
+            "within_uncertainty_band": resolved_advance.get("within_uncertainty_band"),
+        }
 
     try:
         event_ticker = get_event_ticker_for_any_date(series_ticker, day)
@@ -716,6 +763,7 @@ def weekly_table(station_id, days=7):
         "rows": rows,
         "paper_trading": _paper_trading_stats(finalized_rows),
         "low_strategy_comparison": _low_strategy_stats(finalized_rows),
+        "strategy_comparison": _strategy_stats(finalized_rows),
     }
 
 
@@ -743,12 +791,20 @@ def _paper_trading_stats(records):
 
 
 def _bet_row(r, side, trade):
+    """model_p/market_p are .get() rather than [] because not every
+    population carries them: a next-day advance position is priced off
+    the ask a full day out, where the model has no calibrated
+    probability to state (its sigma is fitted on same-day, few-hours-
+    ahead behaviour), so it records the price it paid and nothing it
+    can't stand behind. _aggregate_paper_trading_bets skips the
+    model-vs-market comparison for such populations rather than
+    inventing a number to compare."""
     return {
         "date": r["date"], "side": side,
         "payout": trade["simulated_payout"],
         "hit": trade["hit"],
-        "model_p": trade["model_implied_probability"],
-        "market_p": trade["market_implied_probability"],
+        "model_p": trade.get("model_implied_probability"),
+        "market_p": trade.get("market_implied_probability"),
         "edge_at_entry": trade.get("edge_at_entry"),
         "within_band": trade.get("within_uncertainty_band"),
     }
@@ -790,18 +846,27 @@ def _aggregate_paper_trading_bets(bets):
     band_samples = [b["within_band"] for b in bets if b["within_band"] is not None]
     pct_within_uncertainty_band = round(sum(band_samples) / len(band_samples), 3) if band_samples else None
 
-    for b in bets:
-        truth = 1.0 if b["hit"] else 0.0
-        b["model_dist"] = abs(b["model_p"] - truth)
-        b["market_dist"] = abs(b["market_p"] - truth)
-        b["disagreement"] = abs(b["model_p"] - b["market_p"])
+    # Only meaningful where both probabilities exist - see _bet_row on
+    # why the advance population deliberately has no model probability.
+    scored = [b for b in bets if b["model_p"] is not None and b["market_p"] is not None]
+    model_vs_market = None
+    if scored:
+        for b in scored:
+            truth = 1.0 if b["hit"] else 0.0
+            b["model_dist"] = abs(b["model_p"] - truth)
+            b["market_dist"] = abs(b["market_p"] - truth)
+            b["disagreement"] = abs(b["model_p"] - b["market_p"])
 
-    # The more-disagreeing half of bets - whoever's probability ended up
-    # closer to the actual outcome on THOSE days "won" that comparison.
-    ranked = sorted(bets, key=lambda b: b["disagreement"], reverse=True)
-    top_n = ranked[:max(1, len(ranked) // 2)]
-    model_closer = sum(1 for b in top_n if b["model_dist"] < b["market_dist"])
-    market_closer = sum(1 for b in top_n if b["market_dist"] < b["model_dist"])
+        # The more-disagreeing half of bets - whoever's probability ended
+        # up closer to the actual outcome on THOSE days "won" that
+        # comparison.
+        ranked = sorted(scored, key=lambda b: b["disagreement"], reverse=True)
+        top_n = ranked[:max(1, len(ranked) // 2)]
+        model_vs_market = {
+            "n_high_disagreement_bets": len(top_n),
+            "model_closer_count": sum(1 for b in top_n if b["model_dist"] < b["market_dist"]),
+            "market_closer_count": sum(1 for b in top_n if b["market_dist"] < b["model_dist"]),
+        }
 
     return {
         "n_bets": len(bets),
@@ -809,11 +874,7 @@ def _aggregate_paper_trading_bets(bets):
         "win_rate": win_rate,
         "avg_edge_at_entry": avg_edge_at_entry,
         "pct_within_uncertainty_band": pct_within_uncertainty_band,
-        "model_vs_market": {
-            "n_high_disagreement_bets": len(top_n),
-            "model_closer_count": model_closer,
-            "market_closer_count": market_closer,
-        },
+        "model_vs_market": model_vs_market,
         "low_sample": len(bets) < LOW_SAMPLE_THRESHOLD,
     }
 
@@ -867,6 +928,130 @@ def _low_strategy_stats(records):
     }
 
 
+STRATEGY_KEYS = (
+    "same_day_edge",
+    "same_day_unconditional",
+    "advance_cashed_out",
+    "advance_held",
+)
+
+
+def _advance_trades(records, status):
+    """Every next-day advance position that ended in `status`, as
+    (date, side, trade) triples. The two terminal statuses are pulled
+    apart here and never rejoined - see _strategy_stats."""
+    out = []
+    for r in records:
+        for side in ("high", "low"):
+            rec = r.get(side)
+            if rec is None:
+                continue
+            adv = rec.get("paper_trade_next_day_advance")
+            if adv is not None and adv.get("status") == status:
+                out.append((r, side, adv))
+    return out
+
+
+def _aggregate_cashed_out(trades):
+    """
+    The cash-out population needs its own aggregation because none of the
+    usual questions apply to it. There is no `hit`: the position was
+    closed at a real bid before the weather happened, so no forecast was
+    ever scored. A win rate here would be meaningless, and a "P&L"
+    pooled with settlement outcomes would silently answer two different
+    questions with one number.
+
+    What it can honestly report: how many positions were exited early,
+    what they realized in total and on average, how long they were held,
+    and how far above the entry the exit bid actually was. Same
+    LOW_SAMPLE_THRESHOLD guard as everywhere else.
+    """
+    if not trades:
+        return {"n_positions": 0, "total_realized_gain": None,
+                "avg_realized_gain": None, "avg_hours_held": None,
+                "avg_exit_gain_per_contract": None, "low_sample": True}
+
+    gains = [t["realized_gain"] for _, _, t in trades if t.get("realized_gain") is not None]
+    held = [t["hours_held"] for _, _, t in trades if t.get("hours_held") is not None]
+    per_contract = [
+        round(t["exit_price"] - t["simulated_entry_price"], 4)
+        for _, _, t in trades
+        if t.get("exit_price") is not None and t.get("simulated_entry_price") is not None
+    ]
+    return {
+        "n_positions": len(trades),
+        "total_realized_gain": round(sum(gains), 2) if gains else None,
+        "avg_realized_gain": round(sum(gains) / len(gains), 3) if gains else None,
+        "avg_hours_held": round(sum(held) / len(held), 1) if held else None,
+        "avg_exit_gain_per_contract": round(sum(per_contract) / len(per_contract), 4) if per_contract else None,
+        "low_sample": len(trades) < LOW_SAMPLE_THRESHOLD,
+    }
+
+
+def _strategy_stats(records):
+    """
+    The four bet-selection strategies now running, each aggregated over
+    its own population and NEVER summed into a single headline number.
+    Keeping them apart is the whole point: they answer four different
+    questions, and a combined P&L would be the average of four
+    experiments rather than the result of any of them.
+
+      same_day_edge          - bet only when the model's probability
+                               disagrees with Kalshi by >= MIN_EDGE.
+                               Restricted to the "1hr" leg on purpose:
+                               "1hr" and "2hr" are themselves an
+                               independent comparison that must not be
+                               pooled (see _paper_trading_stats), and
+                               pooling them here to make a tidier
+                               four-way table would quietly destroy it.
+                               The full lead-time split stays available
+                               in its own block.
+      same_day_unconditional - bet the bracket the model's own point
+                               estimate falls into, every day, no edge
+                               required. Both markets as of 2026-08-12.
+      advance_cashed_out     - next-day positions closed early at the
+                               bid because the price moved our way.
+                               "The market re-rated the bracket in our
+                               favour" - a claim about the market.
+      advance_held           - next-day positions carried into
+                               settlement. "The forecast was right" - a
+                               claim about the model. Same trade,
+                               different skill, so different block.
+
+    High and low ARE pooled within each block, which is the convention
+    the existing lead-time stats already use; the low market's own
+    side-isolated edge-vs-unconditional comparison remains separately
+    available in _low_strategy_stats.
+    """
+    edge_bets, uncond_bets = [], []
+    for r in records:
+        for side in ("high", "low"):
+            rec = r.get(side)
+            if rec is None:
+                continue
+
+            edge_trade = (rec.get("paper_trades") or {}).get("1hr")
+            if edge_trade is not None and edge_trade.get("simulated_payout") is not None:
+                edge_bets.append(_bet_row(r, side, edge_trade))
+
+            uncond_trade = rec.get("paper_trade_unconditional")
+            if uncond_trade is not None and uncond_trade.get("simulated_payout") is not None:
+                uncond_bets.append(_bet_row(r, side, uncond_trade))
+
+    held = [
+        _bet_row(r, side, t)
+        for r, side, t in _advance_trades(records, ADVANCE_HELD)
+        if t.get("simulated_payout") is not None
+    ]
+
+    return {
+        "same_day_edge": _aggregate_paper_trading_bets(edge_bets),
+        "same_day_unconditional": _aggregate_paper_trading_bets(uncond_bets),
+        "advance_cashed_out": _aggregate_cashed_out(_advance_trades(records, ADVANCE_CASHED_OUT)),
+        "advance_held": _aggregate_paper_trading_bets(held),
+    }
+
+
 def _side_month_stats(records, side):
     """Reuses backtest()'s mae_f/bias_f naming AND sign convention
     (weather_estimator.py) - see this module's docstring."""
@@ -911,6 +1096,7 @@ def monthly_rollup(station_id, year, month):
         "low": _side_month_stats(records, "low"),
         "paper_trading": _paper_trading_stats(records),
         "low_strategy_comparison": _low_strategy_stats(records),
+        "strategy_comparison": _strategy_stats(records),
     }
 
 

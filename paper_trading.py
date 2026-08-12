@@ -115,23 +115,67 @@ here and pre-filtering on a second guessed cutoff would just hide the
 same problem one level down. `python3 paper_trading.py edge-stats`
 summarizes that log's distribution.
 
-Second strategy, LOW MARKET ONLY: place_unconditional_low_bet() bets
-every single day on whichever bracket the model's own point estimate
-falls into, with no edge threshold at all - the opposite decision rule
-from place_paper_trade's MIN_EDGE gate. It answers a different
-question than the edge-gated bets do: does simply following the
-model's own call every day beat (or lose to) only betting when a real
-mispricing is detected? Every bet - both strategies - carries a
-trigger_type field ("edge" or "unconditional") precisely so the two
-populations are never pooled into one win-rate/P&L number (same
-never-combine principle as LEAD_TIME_HINTS). High-side markets don't
-get an unconditional mode - only low, per the spec this was built to;
-nothing here stops adding one for high later, but nothing calls it
-today. It fires once per day, timed off the SAME ~1hr-before-predicted-
-low checkpoint window peak_alerts.py already locks in for the low
-side's text alert and the existing edge-gated "1hr" bet - no separate
-scheduling exists for it, and it's just as idempotent (day_pending's
-"low_unconditional" key, checked before placing).
+Second strategy, BOTH MARKETS: place_unconditional_bet() bets every
+single day on whichever bracket the model's own point estimate falls
+into, with no edge threshold at all - the opposite decision rule from
+place_paper_trade's MIN_EDGE gate. It answers a different question
+than the edge-gated bets do: does simply following the model's own
+call every day beat (or lose to) only betting when a real mispricing
+is detected? Every bet - both strategies - carries a trigger_type
+field ("edge" or "unconditional") precisely so the two populations are
+never pooled into one win-rate/P&L number (same never-combine
+principle as LEAD_TIME_HINTS). It fires once per day per side, timed
+off the SAME ~1hr-before-predicted-peak checkpoint peak_alerts.py
+already locks in for that side's text alert and the existing
+edge-gated "1hr" bet - no separate scheduling exists for it - and is
+idempotent on day_pending's "<side>_unconditional" key.
+
+  Was low-only until 2026-08-12, and had effectively stopped running
+  well before that: the one-shot alert Routine prompt that invoked
+  `place-unconditional-low` was rewritten on ~2026-07-29 without that
+  line, so the strategy placed exactly ONE bet in its entire life
+  (2026-07-29) and then silently went dormant while its dashboard
+  block kept reporting "insufficient data" as though it were merely
+  young. The low_unconditional pending key is kept byte-identical so
+  that one real bet stays readable; high uses the parallel
+  high_unconditional key. No historical bets are backfilled for
+  either side - the high arm's record starts empty, from now forward.
+
+Third strategy, NEXT-DAY ADVANCE (place_next_day_advance_bet): takes a
+position on TOMORROW's market as soon as the model produces a
+tomorrow's-high/low number - the same projection the next-day-forecast
+track record already scores - rather than waiting for the day itself.
+Two things make it structurally different from every strategy above,
+and both are the reason it is tracked separately rather than folded in:
+
+  1. It is a genuine round trip, not buy-and-hold. Entry simulates
+     BUYING at the ask (what a real buyer pays); exit simulates
+     SELLING at the bid (what a real seller receives). Neither leg
+     ever uses last-trade or mid, because a mid-price fill is a
+     fiction that would manufacture profit out of the spread itself.
+     The spread is paid, in full, on every position.
+  2. It can end in one of two genuinely different ways, and they are
+     never added together: cashed out early (the price moved our way
+     before the weather happened) or held to settlement (we were
+     right about the weather). "The market re-priced in our favour"
+     and "the forecast was correct" are different claims about
+     different skills, so daily_performance keeps them as two
+     populations and the dashboard renders them as two blocks.
+
+  Monitoring rides on the existing hourly refresh (see advance_cycle
+  and the hourly Routine's prompt) rather than adding a second
+  schedule. Hourly is coarse relative to a continuously-quoted book,
+  and a profitable bid that appears and disappears inside one hour
+  will be missed - that is a real, accepted limitation. It is the
+  right trade here anyway: these brackets trade a few hundred
+  contracts a day (some hours literally $0), so a sub-hour blip is
+  usually one small resting order rather than a price our size could
+  actually have sold into, and "simulate hitting it" would flatter
+  the strategy. If the ledger later shows exits clustering at the
+  MIN_EXIT_GAIN boundary - i.e. we are systematically arriving late -
+  that is the evidence that would justify a finer schedule, and
+  best_bid_seen is recorded on every position specifically so that
+  question can be answered from data rather than argued.
 
 Real-money guardrails (documented, NOT implemented - this module never
 places a real order):
@@ -148,7 +192,10 @@ CLI:
     python3 paper_trading.py place high 2hr
     python3 paper_trading.py place low
     python3 paper_trading.py place low 2hr
-    python3 paper_trading.py place-unconditional-low  # low only, no edge gate
+    python3 paper_trading.py place-unconditional high   # no edge gate
+    python3 paper_trading.py place-unconditional low
+    python3 paper_trading.py place-unconditional-low    # deprecated alias
+    python3 paper_trading.py advance-cycle        # place + monitor next-day positions
     python3 paper_trading.py lock-2hr             # lock in today's 2hr targets
     python3 paper_trading.py status
     python3 paper_trading.py edge-stats           # distribution of every edge found, bet or not
@@ -157,7 +204,7 @@ CLI:
 import json
 import math
 import os
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from weather_estimator import estimate_daily_extremes, estimate_temp, backtest
 from kalshi import HIGH_SERIES, LOW_SERIES, get_market_for_date, bracket_contains
@@ -191,6 +238,34 @@ CREDIBLE_SIGMA_SPAN = 1.5
 # such a jump is in whole degrees F.
 DIRECTION_CONFLICT_MIN_BRACKET_GAP = 2
 DIRECTION_CONFLICT_MIN_POINT_SHIFT_F = 2.0
+
+# --- next-day advance strategy -------------------------------------------
+
+ADVANCE_STRATEGY = "next_day_advance"
+
+# How far the current BID has to sit above the price we paid (the ASK)
+# before an early cash-out is simulated. This is on top of the spread,
+# which the buy-at-ask/sell-at-bid convention already charges in full -
+# it exists so a one-tick wobble in a thin book isn't booked as a
+# trading profit.
+#
+# Set from measurement, not taste. Sampled live across both KSEA
+# markets' bracket ladders on 2026-08-12: spreads on brackets with a
+# real two-sided quote ran 0.01-0.06, median 0.03 (e.g. "76-77" 0.37/0.39,
+# "58-59" 0.46/0.52, "74-75" 0.20/0.24). Requiring 0.03 therefore means
+# the bid has to clear our entry by roughly one further typical spread -
+# enough that the move has to be a genuine re-rating of the bracket
+# rather than the book breathing. Deliberate and adjustable, like
+# MIN_EDGE; if positions start cashing out on noise, this is the number
+# to raise.
+MIN_EXIT_GAIN = 0.03
+
+# Position lifecycle. "open" is the only state that gets monitored;
+# the two terminal states are never summed together downstream (see the
+# module docstring and daily_performance._strategy_stats).
+ADVANCE_OPEN = "open"
+ADVANCE_CASHED_OUT = "cashed_out"
+ADVANCE_HELD = "held_to_resolution"
 
 
 def _normal_cdf(x):
@@ -645,38 +720,49 @@ def place_paper_trade(station_id, side, lead_time_hint="1hr"):
     return bet
 
 
-def place_unconditional_low_bet(station_id=STATION):
+def place_unconditional_bet(station_id=STATION, side="low"):
     """
-    The low market's second, non-edge-gated strategy (see module
-    docstring): once per day, unconditionally bets $STAKE on whichever
-    Kalshi bracket the model's own point estimate (estimated_low_f)
-    falls into at call time - regardless of whether that bracket's
-    price disagrees with the model at all. No MIN_EDGE check here; that
-    is the entire point of this strategy.
+    The non-edge-gated strategy (see module docstring): once per day per
+    side, unconditionally bets $STAKE on whichever Kalshi bracket the
+    model's own point estimate falls into at call time - regardless of
+    whether that bracket's price disagrees with the model at all. No
+    MIN_EDGE check here; that is the entire point of this strategy.
 
-    Stored under pending[date_str]["low_unconditional"] - a sibling key
-    to pending[date_str]["low"], never nested inside it, so it can
+    Stored under pending[date_str]["<side>_unconditional"] - a sibling
+    key to pending[date_str][side], never nested inside it, so it can
     never collide with the edge-gated bets' own lead_time_hint keys
-    there.
+    there. The "low_unconditional" spelling is unchanged from when this
+    was low-only, so the single historical bet placed under it on
+    2026-07-29 keeps resolving without a migration.
 
-    Returns the bet dict, or None if already placed today, today's low
-    market can't be found, or the specific bracket the point estimate
-    falls into has no live price to simulate an entry against (same
-    "can't bet what isn't priced" rule place_paper_trade already
+    Returns the bet dict, or None if already placed today for this side,
+    that market can't be found, or the specific bracket the point
+    estimate falls into has no live price to simulate an entry against
+    (same "can't bet what isn't priced" rule place_paper_trade already
     follows - unconditional means "no edge required," not "bet blind
     against an unknown price").
     """
+    if side not in ("high", "low"):
+        raise ValueError(f"side must be 'high' or 'low', got {side!r}")
+
     extremes = estimate_daily_extremes(station_id)
     now = extremes["as_of"]
     date_str = now.date().isoformat()
 
     pending = _load_pending()
     day_pending = pending.get(date_str, {})
-    if "low_unconditional" in day_pending:
+    pending_key = f"{side}_unconditional"
+    if pending_key in day_pending:
         return None
 
-    point = extremes["estimated_low_f"]
-    peak_time = extremes["estimated_low_time"]
+    if side == "high":
+        point = extremes["estimated_high_f"]
+        peak_time = extremes["estimated_high_time"]
+        series = HIGH_SERIES
+    else:
+        point = extremes["estimated_low_f"]
+        peak_time = extremes["estimated_low_time"]
+        series = LOW_SERIES
 
     hours_ahead = max((peak_time - now).total_seconds() / 3600, 0.25)
     est = estimate_temp(station_id, hours_ahead=hours_ahead)
@@ -686,7 +772,7 @@ def place_unconditional_low_bet(station_id=STATION):
     coverage = _empirical_band_coverage(station_id)
     sigma = _calibrated_sigma(half_band, coverage)
 
-    market = get_market_for_date(LOW_SERIES, now.date())
+    market = get_market_for_date(series, now.date())
     if market is None:
         return None
 
@@ -708,6 +794,7 @@ def place_unconditional_low_bet(station_id=STATION):
     # bets carry the same fields and stay directly comparable.
     bet = {
         "trigger_type": "unconditional",
+        "side": side,
         "lead_time_hint": "1hr",
         "simulated_bucket_chosen": chosen["label"],
         "simulated_bucket_floor": chosen["floor_strike"],
@@ -730,10 +817,17 @@ def place_unconditional_low_bet(station_id=STATION):
             for b in market["brackets"]
         ],
     }
-    day_pending["low_unconditional"] = bet
+    day_pending[pending_key] = bet
     pending[date_str] = day_pending
     _save_pending(pending)
     return bet
+
+
+def place_unconditional_low_bet(station_id=STATION):
+    """Deprecated alias kept so the `place-unconditional-low` CLI command
+    (referenced by one-shot Routines created before 2026-08-12) keeps
+    working. New callers should use place_unconditional_bet."""
+    return place_unconditional_bet(station_id, "low")
 
 
 def _bucket_label_for(bet, temp):
@@ -812,9 +906,9 @@ def resolve_paper_trade(date_str, side, actual_temp, band=None):
     return resolved
 
 
-def resolve_unconditional_low_bet(date_str, actual_temp, band=None):
+def resolve_unconditional_bet(date_str, side, actual_temp, band=None):
     """
-    Resolves the unconditional low bet (see place_unconditional_low_bet)
+    Resolves one side's unconditional bet (see place_unconditional_bet)
     the same way resolve_paper_trade resolves everything else - against
     whatever actual_temp the caller hands in (daily_performance.py's
     CLI-preferred value, stream as fallback - see its module docstring).
@@ -822,11 +916,311 @@ def resolve_unconditional_low_bet(date_str, actual_temp, band=None):
     stream_fallback_actuals can re-call this with a corrected
     actual_temp exactly the same way it already does for the edge-gated
     bets - no special-casing needed there. Returns the resolved bet
-    dict, or None if no unconditional bet was placed that day.
+    dict, or None if no unconditional bet was placed that day/side.
     """
     pending = _load_pending()
-    bet = pending.get(date_str, {}).get("low_unconditional")
+    bet = pending.get(date_str, {}).get(f"{side}_unconditional")
     return _resolve_bet(bet, actual_temp, band) if bet is not None else None
+
+
+def resolve_unconditional_low_bet(date_str, actual_temp, band=None):
+    """Deprecated alias - see resolve_unconditional_bet."""
+    return resolve_unconditional_bet(date_str, "low", actual_temp, band)
+
+
+# --- next-day advance positions ------------------------------------------
+
+
+def _advance_positions(pending):
+    """Yield (date_str, side, position) for every advance position on
+    file, in date order. Read-only helper - callers mutate the position
+    dicts in place and save the whole pending structure back."""
+    for date_str in sorted(pending):
+        for side, position in (pending[date_str].get(ADVANCE_STRATEGY) or {}).items():
+            yield date_str, side, position
+
+
+def place_next_day_advance_bet(station_id=STATION, side="high"):
+    """
+    Buys TOMORROW's market today, at the ask, on whichever bracket the
+    model's tomorrow's-high/low projection falls into.
+
+    Filed under pending[target_date][ADVANCE_STRATEGY][side] where
+    target_date is the date being forecast, NOT the date the position
+    was opened - so daily_performance.finalize_day picks it up on the
+    day it actually settles, with no extra bookkeeping, exactly like
+    every other bet for that date.
+
+    Entry price is `yes_ask` and nothing else. Not last_price (a trade
+    that already happened, at a size and moment that aren't ours), not
+    the mid (a price nobody is offering). If the bracket has no ask
+    quoted, there is nothing to buy and no position is opened - the
+    same "can't bet what isn't priced" rule the other strategies use,
+    applied to the side of the book we would actually have to lift.
+
+    Returns the position dict, or None if: already open for that
+    target date + side (idempotent, so this is safe to call every
+    hour), tomorrow's event isn't listed yet, the projection is
+    missing, or the bracket it lands in has no ask. A None here is
+    ordinary - tomorrow's event routinely isn't listed until partway
+    through the day, and the hourly caller simply tries again.
+    """
+    if side not in ("high", "low"):
+        raise ValueError(f"side must be 'high' or 'low', got {side!r}")
+
+    extremes = estimate_daily_extremes(station_id)
+    now = extremes["as_of"]
+    target_date = now.date() + timedelta(days=1)
+    target_date_str = target_date.isoformat()
+
+    pending = _load_pending()
+    day_pending = pending.get(target_date_str, {})
+    advance = day_pending.get(ADVANCE_STRATEGY, {})
+    if side in advance:
+        return None
+
+    point = extremes["tomorrow_high_f"] if side == "high" else extremes["tomorrow_low_f"]
+    source = extremes.get(f"tomorrow_{side}_source")
+    if point is None:
+        return None
+
+    series = HIGH_SERIES if side == "high" else LOW_SERIES
+    market = get_market_for_date(series, target_date)
+    if market is None:
+        return None  # tomorrow's event not listed yet - retry next hour
+
+    chosen = next((b for b in market["brackets"] if bracket_contains(b, point)), None)
+    if chosen is None or chosen["yes_ask"] is None or chosen["yes_ask"] <= 0:
+        return None
+
+    entry_price = chosen["yes_ask"]
+
+    position = {
+        "strategy": ADVANCE_STRATEGY,
+        "trigger_type": ADVANCE_STRATEGY,
+        "side": side,
+        "status": ADVANCE_OPEN,
+        "target_date": target_date_str,
+        "market_ticker": chosen["ticker"],
+        "event_ticker": market["event_ticker"],
+        "simulated_bucket_chosen": chosen["label"],
+        "simulated_bucket_floor": chosen["floor_strike"],
+        "simulated_bucket_cap": chosen["cap_strike"],
+        "simulated_bucket_is_tail": _is_tail_bracket(chosen),
+        # simulated_entry_price is the ask, and is the key _resolve_bet
+        # reads - so a position held to settlement goes through exactly
+        # the same payout arithmetic as every other bet, with no
+        # advance-specific branch in the shared math.
+        "simulated_entry_price": entry_price,
+        "entry_ask": chosen["yes_ask"],
+        "entry_bid": chosen["yes_bid"],
+        "entry_spread": (
+            round(chosen["yes_ask"] - chosen["yes_bid"], 4)
+            if chosen["yes_bid"] is not None else None
+        ),
+        "entry_last_price": chosen["last_price"],
+        "simulated_stake": STAKE,
+        "point_estimate_f": round(point, 2),
+        "projection_source": source,
+        "min_exit_gain": MIN_EXIT_GAIN,
+        "opened_at": now.isoformat(),
+        "hours_before_target_date": round(
+            (datetime.combine(target_date, datetime.min.time()).replace(tzinfo=now.tzinfo) - now
+             ).total_seconds() / 3600, 2
+        ),
+        # Filled in by check_advance_positions. best_bid_seen is kept
+        # even when it never clears MIN_EXIT_GAIN: it is the only way to
+        # answer later whether hourly monitoring was too coarse (see the
+        # module docstring) rather than there simply being no exit.
+        "price_checks": [],
+        "best_bid_seen": chosen["yes_bid"],
+        "best_bid_seen_at": now.isoformat() if chosen["yes_bid"] is not None else None,
+        "all_buckets": [
+            {"label": b["label"], "floor_strike": b["floor_strike"], "cap_strike": b["cap_strike"]}
+            for b in market["brackets"]
+        ],
+    }
+
+    advance[side] = position
+    day_pending[ADVANCE_STRATEGY] = advance
+    pending[target_date_str] = day_pending
+    _save_pending(pending)
+    return position
+
+
+def check_advance_positions(station_id=STATION, now=None):
+    """
+    Prices every open advance position against the CURRENT bid and cashes
+    out the ones showing a real gain. Designed to be called once per
+    hourly refresh (see advance_cycle).
+
+    The exit test is deliberately asymmetric with the entry: we bought at
+    the ask, and we can only leave at the bid. If bid - entry >=
+    MIN_EXIT_GAIN, the position is closed at that bid and the realized
+    gain is booked. Nothing here ever looks at last_price or a mid.
+
+    There is no stop-loss and no exit on an adverse move: a losing
+    position is carried to settlement, where it resolves against the
+    actual weather like every other bet. That is intentional - the
+    question this strategy exists to answer is whether an early
+    favourable re-rating is capturable, and adding a discretionary
+    downside exit would blend a second, untested decision rule into the
+    answer.
+
+    Returns a list of per-position result dicts (one per position
+    checked), so the caller can log what happened without re-reading
+    the file. Network failures are caught per market: one unreachable
+    event must not stop the others from being priced.
+    """
+    pending = _load_pending()
+    if now is None:
+        now = estimate_daily_extremes(station_id)["as_of"]
+    today = now.date()
+
+    results = []
+    changed = False
+    # One market fetch per (date, side) even if that were ever to hold
+    # more than one position, and none at all for dates already past.
+    market_cache = {}
+
+    for date_str, side, position in _advance_positions(pending):
+        if position.get("status") != ADVANCE_OPEN:
+            continue
+        if date.fromisoformat(date_str) < today:
+            # Target date is over; settlement resolution owns it now.
+            continue
+
+        cache_key = (date_str, side)
+        if cache_key not in market_cache:
+            series = HIGH_SERIES if side == "high" else LOW_SERIES
+            try:
+                market_cache[cache_key] = get_market_for_date(
+                    series, date.fromisoformat(date_str)
+                )
+            except Exception as e:
+                print(f"paper_trading: advance check failed for {date_str} {side}: {e}")
+                market_cache[cache_key] = None
+        market = market_cache[cache_key]
+        if market is None:
+            results.append({"date": date_str, "side": side, "checked": False,
+                            "reason": "market unavailable"})
+            continue
+
+        bracket = next(
+            (b for b in market["brackets"] if b["ticker"] == position["market_ticker"]), None
+        )
+        if bracket is None:
+            results.append({"date": date_str, "side": side, "checked": False,
+                            "reason": "bracket no longer listed"})
+            continue
+
+        bid, ask = bracket["yes_bid"], bracket["yes_ask"]
+        entry = position["simulated_entry_price"]
+        gain = round(bid - entry, 4) if bid is not None else None
+
+        check = {"at": now.isoformat(), "bid": bid, "ask": ask, "gain_vs_entry": gain}
+        position["price_checks"].append(check)
+        changed = True
+
+        best = position.get("best_bid_seen")
+        if bid is not None and (best is None or bid > best):
+            position["best_bid_seen"] = bid
+            position["best_bid_seen_at"] = now.isoformat()
+
+        result = {"date": date_str, "side": side, "checked": True,
+                  "bid": bid, "entry": entry, "gain_vs_entry": gain,
+                  "cashed_out": False}
+
+        if gain is not None and gain >= MIN_EXIT_GAIN:
+            opened_at = datetime.fromisoformat(position["opened_at"])
+            # Same contracts-bought arithmetic as _resolve_bet's payout:
+            # $STAKE buys STAKE/entry contracts, so selling at `bid`
+            # realizes STAKE * (bid - entry) / entry. A hold-to-settlement
+            # win is just this with bid = 1.00, which is why the two
+            # outcomes are directly comparable per dollar staked even
+            # though they are never summed.
+            realized = STAKE * (bid - entry) / entry
+            position["status"] = ADVANCE_CASHED_OUT
+            position["exit_price"] = bid
+            position["exit_at"] = now.isoformat()
+            position["exit_gain_per_contract"] = gain
+            position["realized_gain"] = round(realized, 4)
+            position["hours_held"] = round((now - opened_at).total_seconds() / 3600, 2)
+            result["cashed_out"] = True
+            result["realized_gain"] = position["realized_gain"]
+
+        results.append(result)
+
+    if changed:
+        _save_pending(pending)
+    return results
+
+
+def resolve_advance_bet(date_str, side, actual_temp, band=None):
+    """
+    Settlement-time handling for one advance position.
+
+    Two genuinely different endings, returned with a `status` that keeps
+    them apart downstream:
+
+      - Already cashed out: returned as-is. The position was closed at a
+        real bid before the weather happened, so there is nothing to
+        settle and the actual temperature does not change what it made.
+        Deliberately NOT re-scored against the outcome - a cash-out that
+        happened to be followed by a losing forecast is still a
+        profitable trade, and merging the two would answer neither
+        question honestly.
+      - Still open: resolved against actual_temp through the same
+        _resolve_bet used by every other strategy, and tagged
+        held_to_resolution.
+
+    Pure, like the other resolvers, so reconcile_stream_fallback_actuals
+    can re-run it with a corrected CLI value. Returns None if no advance
+    position exists for that date/side.
+    """
+    pending = _load_pending()
+    position = (pending.get(date_str, {}).get(ADVANCE_STRATEGY) or {}).get(side)
+    if position is None:
+        return None
+
+    if position.get("status") == ADVANCE_CASHED_OUT:
+        return {k: v for k, v in position.items() if k != "all_buckets"}
+
+    resolved = _resolve_bet(position, actual_temp, band)
+    if resolved is None:
+        return None  # ambiguous stream band - retried once CLI lands
+    resolved["status"] = ADVANCE_HELD
+    return resolved
+
+
+def advance_cycle(station_id=STATION):
+    """
+    One hourly pass: try to open tomorrow's positions (idempotent, so
+    this is a no-op once both sides are on), then price every open
+    position and cash out any that clear MIN_EXIT_GAIN.
+
+    Bundled into a single command because it rides the existing hourly
+    refresh rather than getting its own schedule - see the module
+    docstring on why hourly is the right granularity here. Placement
+    failures are non-events (tomorrow's market often isn't listed yet)
+    and are reported as data, not raised.
+    """
+    placed = {}
+    for side in ("high", "low"):
+        try:
+            position = place_next_day_advance_bet(station_id, side)
+        except Exception as e:
+            print(f"paper_trading: advance placement failed for {side}: {e}")
+            position = None
+        placed[side] = (
+            {"opened": True, "bucket": position["simulated_bucket_chosen"],
+             "entry_ask": position["simulated_entry_price"],
+             "target_date": position["target_date"]}
+            if position else {"opened": False}
+        )
+
+    checks = check_advance_positions(station_id)
+    return {"placed": placed, "checks": checks}
 
 
 def _load_2hr_schedule():
@@ -902,9 +1296,15 @@ if __name__ == "__main__":
         lead_time_hint = sys.argv[3] if len(sys.argv) > 3 else "1hr"
         bet = place_paper_trade(STATION, side, lead_time_hint)
         print(json.dumps(bet, indent=2) if bet else json.dumps({"placed": False}))
+    elif cmd == "place-unconditional":
+        side = sys.argv[2] if len(sys.argv) > 2 else "low"
+        bet = place_unconditional_bet(STATION, side)
+        print(json.dumps(bet, indent=2) if bet else json.dumps({"placed": False}))
     elif cmd == "place-unconditional-low":
         bet = place_unconditional_low_bet(STATION)
         print(json.dumps(bet, indent=2) if bet else json.dumps({"placed": False}))
+    elif cmd == "advance-cycle":
+        print(json.dumps(advance_cycle(STATION), indent=2))
     elif cmd == "lock-2hr":
         result = get_or_lock_2hr_targets(STATION)
         print(json.dumps(result, indent=2))
@@ -917,4 +1317,7 @@ if __name__ == "__main__":
     elif cmd == "edge-stats":
         print(json.dumps(edge_log_stats(), indent=2))
     else:
-        print(f"Unknown command: {cmd}. Use place <high|low> [1hr|2hr] | place-unconditional-low | lock-2hr | status | edge-stats.")
+        print(
+            f"Unknown command: {cmd}. Use place <high|low> [1hr|2hr] | "
+            "place-unconditional <high|low> | advance-cycle | lock-2hr | status | edge-stats."
+        )

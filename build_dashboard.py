@@ -49,7 +49,7 @@ from daily_performance import (
     LOW_SAMPLE_THRESHOLD,
 )
 from peak_alerts import get_or_lock_daily_targets
-from paper_trading import get_or_lock_2hr_targets, LEAD_TIME_HINTS
+from paper_trading import get_or_lock_2hr_targets, LEAD_TIME_HINTS, MIN_EXIT_GAIN
 
 STATION = "KSEA"
 HOURS_AHEAD = 3
@@ -644,6 +644,84 @@ LOW_STRATEGY_LABELS = {
     "edge": "Low - edge-triggered (1hr)",
     "unconditional": "Low - unconditional (1hr)",
 }
+
+STRATEGY_LABELS = {
+    "same_day_edge": "Same-day · edge-triggered <span class=\"perf-subtle\">(1hr leg)</span>",
+    "same_day_unconditional": "Same-day · unconditional <span class=\"perf-subtle\">(high + low)</span>",
+    "advance_cashed_out": "Next-day advance · cashed out early",
+    "advance_held": "Next-day advance · held to settlement",
+}
+
+
+def build_cashed_out_block(stats, label):
+    """
+    The cash-out population's own renderer. It deliberately shows no win
+    rate and no "P&L" line: nothing here was ever scored against the
+    weather, so a win rate would be undefined and putting its realized
+    gains under the same heading as settlement P&L is exactly the
+    collapse this feature exists to avoid. What it shows instead is what
+    an early exit actually is - how many, how much realized, how long
+    held, and how far above entry the exit bid was.
+    """
+    def row(l, v):
+        return f'<div class="range-row"><span class="range-label">{l}</span><span class="range-values">{v}</span></div>'
+
+    header = f'<div class="module-label" style="margin-top: 16px;">{label}</div>'
+    if stats["n_positions"] == 0:
+        return header + (
+            '<div class="hint">No position has been cashed out early yet. A position is only '
+            f'exited when the bid clears the entry ask by at least {MIN_EXIT_GAIN * 100:.0f} '
+            'cents; otherwise it is carried into settlement and counted in the block below.</div>'
+        )
+
+    rows = [row("Positions exited early", f"{stats['n_positions']}")]
+    if stats["total_realized_gain"] is not None:
+        sign = "+" if stats["total_realized_gain"] >= 0 else ""
+        rows.append(row("Realized on exit", f"{sign}${stats['total_realized_gain']:.2f}"))
+    if stats["avg_exit_gain_per_contract"] is not None:
+        rows.append(row("Avg. exit above entry", f"{stats['avg_exit_gain_per_contract'] * 100:.1f} cents"))
+    if stats["avg_hours_held"] is not None:
+        rows.append(row("Avg. holding time", f"{stats['avg_hours_held']:.1f} h"))
+
+    block = header + "\n".join(rows)
+    if stats["low_sample"]:
+        block += (
+            f'<div class="hint">Only {stats["n_positions"]} early exit(s) so far - too few to read '
+            f'as a rate or a strategy result (needs at least {LOW_SAMPLE_THRESHOLD}). Shown as a '
+            'running count, not a performance claim.</div>'
+        )
+    block += (
+        '<div class="hint">Bought at the ask, sold at the bid - the spread is paid on both legs, '
+        'never a mid-price fill. These gains are NOT added to any settlement P&amp;L below: '
+        '"the market re-priced in our favour" and "the forecast was right" are different claims.</div>'
+    )
+    return block
+
+
+def build_strategy_comparison(stats_by_key):
+    """All four strategies, one block each, never summed. The three
+    settlement-resolved populations share build_paper_trading_rows'
+    renderer; the cash-out population gets its own because its numbers
+    mean something different (see build_cashed_out_block)."""
+    settled_keys = ("same_day_edge", "same_day_unconditional", "advance_held")
+    parts = [
+        build_paper_trading_rows(
+            {k: stats_by_key[k] for k in settled_keys[:2]},
+            keys=settled_keys[:2], labels=STRATEGY_LABELS,
+        ),
+        build_cashed_out_block(stats_by_key["advance_cashed_out"], STRATEGY_LABELS["advance_cashed_out"]),
+        # Wrapped rather than relying on build_paper_trading_rows' own
+        # spacing: that function only margins blocks after the first, and
+        # this is a single-key call that is nonetheless the third block on
+        # the page.
+        '<div style="margin-top: 16px;">'
+        + build_paper_trading_rows(
+            {"advance_held": stats_by_key["advance_held"]},
+            keys=("advance_held",), labels=STRATEGY_LABELS,
+        )
+        + "</div>",
+    ]
+    return "\n".join(parts)
 
 
 def build_paper_trading_rows(stats_by_key, keys=LEAD_TIME_HINTS, labels=LEAD_TIME_LABELS):
@@ -1624,6 +1702,8 @@ def main():
         ),
         "monthly_high_stats": build_monthly_stats_rows(monthly_perf["high"]),
         "monthly_low_stats": build_monthly_stats_rows(monthly_perf["low"]),
+        "weekly_strategy_comparison": build_strategy_comparison(weekly_perf["strategy_comparison"]),
+        "monthly_strategy_comparison": build_strategy_comparison(monthly_perf["strategy_comparison"]),
         "weekly_paper_trading": build_paper_trading_rows(weekly_perf["paper_trading"]),
         "monthly_paper_trading": build_paper_trading_rows(monthly_perf["paper_trading"]),
         "weekly_low_strategy": build_paper_trading_rows(

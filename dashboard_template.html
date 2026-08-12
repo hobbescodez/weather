@@ -1138,6 +1138,15 @@
     </details>
 
     <details class="glass wide">
+      <summary class="module-label">Paper trading · strategies compared</summary>
+      <div class="module-label">Trailing 7 days</div>
+      {{weekly_strategy_comparison}}
+      <div class="module-label" style="margin-top: 22px;">{{monthly_label}}</div>
+      {{monthly_strategy_comparison}}
+      <div class="hint">Four independent decision rules, deliberately never summed into one number - each answers a different question, so a combined P&amp;L would be the average of four experiments rather than the result of any of them. <b>Edge-triggered</b> bets only when the model's probability disagrees with Kalshi by at least 15 points (shown here for the 1hr leg only; the 1hr-vs-2hr comparison is its own experiment and lives in the block below). <b>Unconditional</b> bets the bracket the model's point estimate falls into, every day, no edge required. The two <b>next-day advance</b> rows are the same positions split by how they ended: bought at the ask the evening before, then either sold at the bid early because the price moved our way, or carried into settlement and scored against the actual weather. Simulated only - no real orders, ever.</div>
+    </details>
+
+    <details class="glass wide">
       <summary class="module-label">Paper trading · trailing 7 days</summary>
       {{weekly_paper_trading}}
       <div class="hint">Simulated only - no real orders placed. A bet is logged when the model's own (backtest-calibrated) probability disagrees with Kalshi's price by at least 15 points - independently at ~1hr and ~2hr before the predicted peak, so the two lead times can be compared rather than picking one upfront. Kept separate on purpose - see the two blocks below.</div>
