@@ -1138,109 +1138,139 @@ _VOID_TAGS = frozenset(
 )
 
 
-class _ContentChildren(HTMLParser):
-    """Collect the direct children of <div class="content">.
-
-    Only the top level matters: those are the grid items. For each one we
-    record its classes and whether it contains a .perf-scroll anywhere
-    inside, since that is what the CSS keys full width off.
-    """
+class _ElementTree(HTMLParser):
+    """Minimal element tree of the rendered page - tags and classes only,
+    no text. Built because the layout invariant is now nested: the grid
+    containers are the tab panels, which sit inside .content, so walking
+    one level of children (what this used to do) no longer reaches the
+    panels that actually get laid out."""
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
-        self.in_content = False
-        self.depth = 0
-        self.children = []
-        self._cur = None
+        self.root = {"tag": "#root", "classes": [], "children": []}
+        self._stack = [self.root]
 
     def handle_startendtag(self, tag, attrs):
         # <line ... /> and friends inside the SVGs: self-closing, so they
-        # neither open a child nor change depth.
-        if self.in_content and self._cur is not None:
-            if "perf-scroll" in (dict(attrs).get("class") or "").split():
-                self._cur["perf"] = True
+        # open nothing and can never be a container or a grid item.
+        pass
 
     def handle_starttag(self, tag, attrs):
         if tag in _VOID_TAGS:
             return
-        classes = (dict(attrs).get("class") or "").split()
-        if not self.in_content:
-            if tag == "div" and "content" in classes:
-                self.in_content = True
-                self.depth = 0
-            return
-        if self.depth == 0:
-            self._cur = {"classes": classes, "perf": False}
-            self.children.append(self._cur)
-        elif self._cur is not None and "perf-scroll" in classes:
-            self._cur["perf"] = True
-        self.depth += 1
+        node = {
+            "tag": tag,
+            "classes": (dict(attrs).get("class") or "").split(),
+            "children": [],
+        }
+        self._stack[-1]["children"].append(node)
+        self._stack.append(node)
 
     def handle_endtag(self, tag):
-        if not self.in_content or tag in _VOID_TAGS:
+        if tag in _VOID_TAGS:
             return
-        self.depth -= 1
-        if self.depth <= 0:
-            self._cur = None
-            if self.depth < 0:
-                self.in_content = False
+        if len(self._stack) > 1:
+            self._stack.pop()
+
+
+def _descendants(node):
+    for child in node["children"]:
+        yield child
+        yield from _descendants(child)
+
+
+def _has_class(node, name):
+    return name in node["classes"]
+
+
+# Grid items that always span the full width, so they bound a run of
+# half-width panels rather than belonging to one. Everything structural
+# (the tab bar, a tab panel itself) is full-width by definition.
+_FULL_WIDTH_CLASSES = ("wide", "place", "hero", "footer", "tab-bar", "tab-panel")
 
 
 def check_panel_layout(html):
     """Warn when the desktop grid would leave an empty cell beside a panel.
 
-    Above 860px the panels flow in DOM order into two equal columns, and a
-    full-width panel always starts a fresh row. So every run of half-width
-    panels bounded by full-width ones has to be an even count - an odd run
-    leaves its last panel alone in column 1 with a visible hole beside it,
-    which is what put a 673px gap next to the tomorrow's-low volume chart.
+    Above 860px the panels in a tab flow in DOM order into two equal
+    columns, and a full-width panel always starts a fresh row. So every
+    run of half-width panels bounded by full-width ones has to be an even
+    count - an odd run leaves its last panel alone in column 1 with a
+    visible hole beside it, which is what put a 673px gap next to the
+    tomorrow's-low volume chart.
 
-    CSS has no selector for "last item in a row", so the invariant cannot
-    live in the stylesheet and is checked here instead. This warns rather
-    than raising: an empty grid cell is cosmetic, and the hourly refresh
-    publishing a slightly gapped dashboard beats it publishing nothing.
+    Checked PER TAB PANEL, not per page, because that is where the grid
+    now lives. This matters more than it sounds: the invariant is no
+    longer global, so moving a card from one tab to another can break
+    BOTH tabs at once (leaving an odd run behind and creating one
+    ahead), and a tab whose cards are all full-width is trivially fine
+    no matter what the other tabs do. The old whole-page count would
+    have gone on reporting "OK" against the wrong structure entirely -
+    it would have seen .content's children (a header, a nav, five
+    panels, a footer), found no half-width items at all, and passed
+    unconditionally forever.
+
+    CSS has no selector for "last item in a row", so the invariant
+    cannot live in the stylesheet and is checked here instead. This
+    warns rather than raising: an empty grid cell is cosmetic, and the
+    hourly refresh publishing a slightly gapped dashboard beats it
+    publishing nothing.
     """
-    parser = _ContentChildren()
-    parser.feed(html)
-    if not parser.children:
-        print("LAYOUT_WARNING: could not find .content children to check")
+    tree = _ElementTree()
+    tree.feed(html)
+
+    content = next((n for n in _descendants(tree.root) if _has_class(n, "content")), None)
+    if content is None:
+        print("LAYOUT_WARNING: could not find .content to check")
         return
 
-    def is_wide(child):
-        cls = child["classes"]
-        return (
-            "wide" in cls
-            or "place" in cls
-            or "hero" in cls
-            or "footer" in cls
-            or child["perf"]  # .glass:has(.perf-scroll)
-        )
+    containers = [(f"tab {i + 1}", n) for i, n in enumerate(
+        [c for c in content["children"] if _has_class(c, "tab-panel")]
+    )]
+    if not containers:
+        # No tabs (or the structure changed out from under this check) -
+        # fall back to treating .content itself as the single grid, which
+        # is what it was before the tabbed restructure.
+        containers = [("page", content)]
 
-    runs, run = [], 0
-    for child in parser.children:
-        if is_wide(child):
-            runs.append(run)
-            run = 0
-        else:
-            run += 1
-    runs.append(run)
+    def is_wide(node):
+        if any(_has_class(node, c) for c in _FULL_WIDTH_CLASSES):
+            return True
+        # .glass:has(.perf-scroll) - a panel holding a performance table
+        # gets full width from its content, not from a hand-applied class.
+        return any(_has_class(d, "perf-scroll") for d in _descendants(node))
 
-    odd = [n for n in runs if n % 2]
-    if odd:
-        print(
-            f"LAYOUT_WARNING: {len(odd)} run(s) of half-width panels have an odd "
-            f"count {odd} - the last panel in each will sit alone in column 1 "
-            f"with an empty cell beside it. Mark that panel .wide (it must be "
-            f"the LAST of the run; widening an earlier one just moves the hole)."
-        )
-    else:
+    warned = False
+    summary = []
+    for name, container in containers:
+        runs, run = [], 0
+        for child in container["children"]:
+            if is_wide(child):
+                runs.append(run)
+                run = 0
+            else:
+                run += 1
+        runs.append(run)
+
+        odd = [n for n in runs if n % 2]
         n_half = sum(runs)
+        if odd:
+            warned = True
+            label = " ".join(container.get("classes") or []) or name
+            print(
+                f"LAYOUT_WARNING: {name} ({label}) has {len(odd)} run(s) of "
+                f"half-width panels with an odd count {odd} - the last panel in "
+                f"each will sit alone in column 1 with an empty cell beside it. "
+                f"Mark that panel .wide (it must be the LAST of the run; widening "
+                f"an earlier one just moves the hole)."
+            )
+        summary.append(f"{name}={n_half}h")
+
+    if not warned:
         print(
-            f"Panel layout OK: {len(parser.children)} grid items, {n_half} "
-            f"half-width in even runs {[n for n in runs if n]}, no orphan cells."
+            f"Panel layout OK: {len(containers)} grid container(s), "
+            f"half-width counts {', '.join(summary)}, all runs even, no orphan cells."
         )
-
-
 def main():
     est = estimate_temp(STATION, hours_ahead=HOURS_AHEAD)
     extremes = estimate_daily_extremes(STATION)

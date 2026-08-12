@@ -829,6 +829,94 @@
     line-height: 1.5;
   }
 
+  /* --- page section tabs -------------------------------------------
+     Same radio + :checked sibling technique as the metric switcher
+     above, for the same reasons: zero JavaScript, so the page keeps
+     working with scripting disabled, and radio inputs are natively
+     keyboard-operable (arrow keys move between tabs) without any
+     ARIA or key handling of our own.
+
+     The one thing worth explaining is --tab-display. A visible panel
+     has to be a flex column on a phone and a two-column grid on a
+     desktop, but the selector that decides WHICH panel is visible is
+     a five-way :checked list. Writing that list twice - once per
+     breakpoint - is how this would normally be done and it is exactly
+     the kind of duplication that rots: someone adds a sixth tab, hits
+     one list, and the new tab silently renders as a phone-width
+     column on desktop. Routing display through a custom property
+     lets the breakpoint change the VALUE while the :checked list
+     stays written once. */
+  :root { --tab-display: flex; }
+
+  .tab-radio {
+    position: absolute;
+    opacity: 0;
+    width: 1px; height: 1px;
+    pointer-events: none;
+  }
+  .tab-bar {
+    display: flex;
+    gap: 4px;
+    padding: 5px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.10);
+    border: 1px solid var(--glass-line);
+    /* Five tabs do not fit across a 390px phone; let the bar scroll
+       rather than shrinking the labels to unreadability. */
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tab-bar::-webkit-scrollbar { display: none; }
+  .tab {
+    flex: 1 0 auto;
+    text-align: center;
+    white-space: nowrap;
+    padding: 9px 14px;
+    border-radius: 999px;
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text-faint);
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.18s ease, color 0.18s ease;
+  }
+  .tab:hover { color: var(--text-soft); }
+
+  .tab-panel {
+    display: none;
+    flex-direction: column;
+    gap: 26px;
+  }
+
+  #tab-now:checked      ~ .tab-panel:nth-of-type(1),
+  #tab-markets:checked  ~ .tab-panel:nth-of-type(2),
+  #tab-record:checked   ~ .tab-panel:nth-of-type(3),
+  #tab-paper:checked    ~ .tab-panel:nth-of-type(4),
+  #tab-fremont:checked  ~ .tab-panel:nth-of-type(5) {
+    display: var(--tab-display);
+  }
+  #tab-now:checked      ~ .tab-bar .tab:nth-child(1),
+  #tab-markets:checked  ~ .tab-bar .tab:nth-child(2),
+  #tab-record:checked   ~ .tab-bar .tab:nth-child(3),
+  #tab-paper:checked    ~ .tab-bar .tab:nth-child(4),
+  #tab-fremont:checked  ~ .tab-bar .tab:nth-child(5) {
+    background: var(--glass-bg-strong);
+    color: var(--text-strong);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+  }
+  /* The radio itself is visually hidden, so keyboard focus has to be
+     shown on the bar or tabbing into the section switcher looks like
+     focus vanished. */
+  .tab-radio:focus-visible ~ .tab-bar {
+    outline: 2px solid var(--text-strong);
+    outline-offset: 3px;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .tab-panel { animation: metric-fade 0.28s ease-out both; }
+  }
+
   .footer {
     font-size: 12px;
     color: var(--text-faint);
@@ -845,18 +933,26 @@
     }
   }
 
-  /* Desktop layout: below this, .content stays the original single-column
-     phone-width card (max-width: 430px, defined above) - that's the only
-     layout this page had until now. Above it, widen the container and lay
-     small stat cards out two-up so they don't stretch into awkwardly wide
+  /* Desktop layout: below this, each tab panel stays the original
+     single-column phone-width card (max-width: 430px on .content,
+     defined above). Above it, widen the container and lay small stat
+     cards out two-up so they don't stretch into awkwardly wide
      single-column cards; data-dense panels (weekly/monthly performance,
      paper trading, both already width:100% tables/text internally) get
      marked .wide to span both columns instead, since a single continuous
-     table reads better wide, not split. */
+     table reads better wide, not split.
+
+     The two-column grid lives on .tab-panel now, not on .content:
+     .content holds the header, the tab bar, five panels and the global
+     footer, and those are a plain stacked column at every width. Each
+     tab panel is its own independent grid, which also means the
+     even-run invariant checked by build_dashboard.check_panel_layout is
+     now per-tab rather than per-page - a tab can leave an orphan cell
+     entirely on its own. */
   @media (min-width: 860px) {
-    .content {
-      max-width: 1080px;
-      display: grid;
+    .content { max-width: 1080px; }
+    :root { --tab-display: grid; }
+    .tab-panel {
       grid-template-columns: repeat(2, minmax(0, 1fr));
       align-items: start;
     }
@@ -889,340 +985,366 @@
       <div class="place-updated">As of {{as_of_time}} · {{as_of_date}}</div>
     </div>
 
-    <div class="hero">
-      {{hero_icon_svg}}
-      <div class="hero-condition">{{condition_text}}</div>
-      <div class="hero-temp">{{current_temp}}<sup>°F</sup></div>
-      <!-- Plain language, not notation, and empty (so hidden) whenever the
-           reading genuinely carries tenths. -->
-      <div class="hero-precision-note">{{current_temp_precision_note}}</div>
+    <!-- Section tabs. Radio inputs + :checked sibling selectors,
+         the same technique as the metric switcher above and for the
+         same reasons: no JavaScript, so this works with scripting
+         disabled, and radios are natively keyboard-operable. The
+         inputs must stay siblings of (and before) both the tab bar
+         and the panels for the ~ combinator to reach them. -->
+    <input type="radio" name="dashtab" id="tab-now" class="tab-radio" checked>
+    <input type="radio" name="dashtab" id="tab-markets" class="tab-radio">
+    <input type="radio" name="dashtab" id="tab-record" class="tab-radio">
+    <input type="radio" name="dashtab" id="tab-paper" class="tab-radio">
+    <input type="radio" name="dashtab" id="tab-fremont" class="tab-radio">
+    <nav class="tab-bar" aria-label="Dashboard sections">
+      <label for="tab-now" class="tab">Now</label>
+      <label for="tab-markets" class="tab">Markets</label>
+      <label for="tab-record" class="tab">Track record</label>
+      <label for="tab-paper" class="tab">Paper trading</label>
+      <label for="tab-fremont" class="tab">Fremont</label>
+    </nav>
 
-      <div class="hero-hilo">
-        <span><span class="hilo-arrow-high">↑</span>{{daily_high}}°</span>
-        <span><span class="hilo-arrow-low">↓</span>{{daily_low}}°</span>
-      </div>
-    </div>
+    <section class="tab-panel" aria-label="Now">
+      <div class="hero">
+        {{hero_icon_svg}}
+        <div class="hero-condition">{{condition_text}}</div>
+        <div class="hero-temp">{{current_temp}}<sup>°F</sup></div>
+        <!-- Plain language, not notation, and empty (so hidden) whenever the
+             reading genuinely carries tenths. -->
+        <div class="hero-precision-note">{{current_temp_precision_note}}</div>
 
-    <div class="glass">
-      <div class="module-label">Trend</div>
-      <div class="estimate-row">
-        <span class="estimate-value"><span class="dot-warm"></span>{{estimated_temp}}°</span>
-        <span class="estimate-label">by {{target_time}}</span>
-      </div>
-
-      <div class="range-row">
-        <span class="range-label">Raw local trend {{trend_slope_se}}°/hr</span>
-        <span class="range-values">{{trend_per_hr}}°/hr</span>
-      </div>
-      <div class="hint trend-insignificant">{{trend_significance_note}}</div>
-      <div class="range-row" style="margin-top: 6px;">
-        <span class="range-label">Applied, after damping</span>
-        <span class="range-values">{{confidence_pct}}%</span>
-      </div>
-      <div class="confidence-bar">
-        <div class="confidence-fill" style="width: {{confidence_pct}}%;"></div>
-      </div>
-      <div class="hint">How much of the raw trend the model trusts, based on proximity to sunrise/peak-heat hour and current cloud/wind. Low near those turning points, since the trend is about to reverse.</div>
-
-      <div class="range-row" style="margin-top: 16px;">
-        <span class="range-label">Uncertainty band</span>
-        <span class="range-values">{{range_low}}°–{{range_high}}° (±{{band_width}}°)</span>
-      </div>
-      <div class="hint">Widens when local pressure is falling (unsettled weather approaching), and independently when the marine push or offshore flow signals below are elevated - separate from the trend confidence above.</div>
-      {{uncertainty_note_html}}
-    </div>
-
-    <div class="glass">
-      <div class="module-label">Last {{sparkline_hours}}h + projection</div>
-      {{sparkline_svg}}
-      <div class="spark-caption">
-        <span>{{sparkline_hours}}h ago</span>
-        <span class="spark-caption-target">{{target_time}}</span>
-      </div>
-    </div>
-
-    <div class="glass">
-      <div class="module-label">Conditions · last {{sparkline_hours}}h</div>
-      {{metric_switcher_html}}
-      <div class="spark-caption">
-        <span>{{sparkline_hours}}h ago</span>
-        <span>now</span>
-      </div>
-      <div class="hint">The same station readings the model itself runs on - what the trend fit and the cross-station gradient network are built from. History only; the dashed projection above is temperature-specific.</div>
-    </div>
-
-    <div class="glass">
-      <div class="module-label">Estimated hottest/coldest time of day</div>
-      <div class="hilo-detail-row">
-        <div class="hilo-detail">
-          <span class="hilo-detail-arrow hilo-arrow-high">↑</span>
-          <span class="hilo-value">{{daily_high}}°</span>
-          <span class="hilo-detail-caption">{{daily_high_caption}} · est. peak ~{{est_peak_time}}</span>
-          <span class="hilo-detail-caption hero-precision">{{daily_high_source_note}}</span>
-        </div>
-        <div class="hilo-detail">
-          <span class="hilo-detail-arrow hilo-arrow-low">↓</span>
-          <span class="hilo-value">{{daily_low}}°</span>
-          <span class="hilo-detail-caption">{{daily_low_caption}} · est. trough ~{{est_trough_time}}</span>
-          <span class="hilo-detail-caption hero-precision">{{daily_low_source_note}}</span>
+        <div class="hero-hilo">
+          <span><span class="hilo-arrow-high">↑</span>{{daily_high}}°</span>
+          <span><span class="hilo-arrow-low">↓</span>{{daily_low}}°</span>
         </div>
       </div>
-      {{same_day_confidence_html}}
-      <div class="module-label" style="margin-top: 16px;">Actual so far today</div>
-      <div class="hilo-detail-row">
-        <div class="hilo-detail">
-          <span class="hilo-detail-arrow hilo-arrow-high">↑</span>
-          <span class="hilo-value">{{observed_high}}°</span>
-          <span class="hilo-detail-caption">recorded at {{observed_high_time}}</span>
-          <span class="hilo-detail-caption hero-precision">{{observed_high_precision_note}}</span>
+
+      <div class="glass">
+        <div class="module-label">Trend</div>
+        <div class="estimate-row">
+          <span class="estimate-value"><span class="dot-warm"></span>{{estimated_temp}}°</span>
+          <span class="estimate-label">by {{target_time}}</span>
         </div>
-        <div class="hilo-detail">
-          <span class="hilo-detail-arrow hilo-arrow-low">↓</span>
-          <span class="hilo-value">{{observed_low}}°</span>
-          <span class="hilo-detail-caption">recorded at {{observed_low_time}}</span>
-          <span class="hilo-detail-caption hero-precision">{{observed_low_precision_note}}</span>
+
+        <div class="range-row">
+          <span class="range-label">Raw local trend {{trend_slope_se}}°/hr</span>
+          <span class="range-values">{{trend_per_hr}}°/hr</span>
+        </div>
+        <div class="hint trend-insignificant">{{trend_significance_note}}</div>
+        <div class="range-row" style="margin-top: 6px;">
+          <span class="range-label">Applied, after damping</span>
+          <span class="range-values">{{confidence_pct}}%</span>
+        </div>
+        <div class="confidence-bar">
+          <div class="confidence-fill" style="width: {{confidence_pct}}%;"></div>
+        </div>
+        <div class="hint">How much of the raw trend the model trusts, based on proximity to sunrise/peak-heat hour and current cloud/wind. Low near those turning points, since the trend is about to reverse.</div>
+
+        <div class="range-row" style="margin-top: 16px;">
+          <span class="range-label">Uncertainty band</span>
+          <span class="range-values">{{range_low}}°–{{range_high}}° (±{{band_width}}°)</span>
+        </div>
+        <div class="hint">Widens when local pressure is falling (unsettled weather approaching), and independently when the marine push or offshore flow signals below are elevated - separate from the trend confidence above.</div>
+        {{uncertainty_note_html}}
+      </div>
+
+      <div class="glass">
+        <div class="module-label">Last {{sparkline_hours}}h + projection</div>
+        {{sparkline_svg}}
+        <div class="spark-caption">
+          <span>{{sparkline_hours}}h ago</span>
+          <span class="spark-caption-target">{{target_time}}</span>
         </div>
       </div>
-      <div class="module-label" style="margin-top: 16px;">Yesterday</div>
-      <div class="hilo-detail-row">
-        <div class="hilo-detail">
-          <span class="hilo-detail-arrow hilo-arrow-high">↑</span>
-          <span class="hilo-value">{{yesterday_high}}°</span>
-          <span class="hilo-detail-caption">recorded at {{yesterday_high_time}}</span>
+
+      <div class="glass">
+        <div class="module-label">Conditions · last {{sparkline_hours}}h</div>
+        {{metric_switcher_html}}
+        <div class="spark-caption">
+          <span>{{sparkline_hours}}h ago</span>
+          <span>now</span>
         </div>
-        <div class="hilo-detail">
-          <span class="hilo-detail-arrow hilo-arrow-low">↓</span>
-          <span class="hilo-value">{{yesterday_low}}°</span>
-          <span class="hilo-detail-caption">recorded at {{yesterday_low_time}}</span>
-        </div>
+        <div class="hint">The same station readings the model itself runs on - what the trend fit and the cross-station gradient network are built from. History only; the dashed projection above is temperature-specific.</div>
       </div>
-      <div class="hint">{{yesterday_source_note}}</div>
-    </div>
 
-    <div class="glass">
-      <div class="module-label">Tomorrow's high</div>
-      <div class="estimate-row">
-        <span class="estimate-value"><span class="dot-warm"></span>{{tomorrow_high}}°</span>
-        <span class="estimate-label">{{tomorrow_meta}}</span>
-      </div>
-      <div class="confidence-bar" style="margin-top: 10px;">
-        <div class="confidence-fill" style="width: {{tomorrow_confidence_pct}}%;"></div>
-      </div>
-      <div class="hint">{{tomorrow_hint}}</div>
-
-      <div class="module-label" style="margin-top: 16px;">Tomorrow's low</div>
-      <div class="estimate-row">
-        <span class="estimate-value">{{tomorrow_low}}°</span>
-        <span class="estimate-label">{{tomorrow_low_meta}}</span>
-      </div>
-      <div class="confidence-bar" style="margin-top: 10px;">
-        <div class="confidence-fill" style="width: {{tomorrow_low_confidence_pct}}%;"></div>
-      </div>
-      <div class="hint">{{tomorrow_low_hint}}</div>
-    </div>
-
-    <div class="glass">
-      <div class="module-label">Kalshi · today's high market</div>
-      {{kalshi_high_rows}}
-      <div class="hint">Highlighted bracket is the one this tool's own estimate falls into - not a probability call, just a quick eyeball check against the market's pricing.</div>
-      <div class="hint">Bid/ask are the current highest buy offer and lowest sell offer for that bracket (last-price is the most recent trade, which can lag). A wide gap between them usually means a thin, less reliable market.</div>
-      <div class="kalshi-ticker">{{kalshi_high_ticker}}</div>
-    </div>
-
-    <details class="glass">
-      <summary class="module-label">Kalshi · today's high market volume</summary>
-      <div class="estimate-row">
-        <span class="estimate-value">{{high_volume_total}}</span>
-        <span class="estimate-label">contracts traded, last 24h</span>
-      </div>
-      <div class="range-row">
-        <span class="range-label">Dollar volume (our estimate)</span>
-        <span class="range-values">{{high_volume_dollars_est}}</span>
-      </div>
-      {{high_volume_svg}}
-      <div class="hint">Contract count matches Kalshi's own "Volume" figure; the dollar amount is our own estimate (contracts × that hour's average price) since Kalshi doesn't publish a dollar total directly. Applies to all four volume charts on this page (today's/tomorrow's high/low).</div>
-    </details>
-
-    <div class="glass">
-      <div class="module-label">Kalshi · today's low market</div>
-      {{kalshi_low_rows}}
-      <div class="hint">Trades stay manual for now - this is a side-by-side view for a human to review, not an automated signal.</div>
-      <div class="kalshi-ticker">{{kalshi_low_ticker}}</div>
-    </div>
-
-    <details class="glass">
-      <summary class="module-label">Kalshi · today's low market volume</summary>
-      <div class="estimate-row">
-        <span class="estimate-value">{{low_volume_total}}</span>
-        <span class="estimate-label">contracts traded, last 24h</span>
-      </div>
-      <div class="range-row">
-        <span class="range-label">Dollar volume (our estimate)</span>
-        <span class="range-values">{{low_volume_dollars_est}}</span>
-      </div>
-      {{low_volume_svg}}
-    </details>
-
-    <div class="glass">
-      <div class="module-label">Kalshi · tomorrow's high market</div>
-      {{kalshi_tomorrow_high_rows}}
-      <div class="hint">Highlighted bracket is the one this tool's tomorrow-high estimate falls into.</div>
-      <div class="kalshi-ticker">{{kalshi_tomorrow_high_ticker}}</div>
-    </div>
-
-    <details class="glass">
-      <summary class="module-label">Kalshi · tomorrow's high market volume</summary>
-      <div class="estimate-row">
-        <span class="estimate-value">{{tomorrow_high_volume_total}}</span>
-        <span class="estimate-label">contracts traded, last 24h</span>
-      </div>
-      <div class="range-row">
-        <span class="range-label">Dollar volume (our estimate)</span>
-        <span class="range-values">{{tomorrow_high_volume_dollars_est}}</span>
-      </div>
-      {{tomorrow_high_volume_svg}}
-    </details>
-
-    <div class="glass">
-      <div class="module-label">Kalshi · tomorrow's low market</div>
-      {{kalshi_tomorrow_low_rows}}
-      <div class="hint">Highlighted bracket is the one this tool's tomorrow-low estimate falls into.</div>
-      <div class="kalshi-ticker">{{kalshi_tomorrow_low_ticker}}</div>
-    </div>
-
-    <!-- Deliberately wide, and it has to be THIS panel: it is the last of the
-         run of half-width cards, and that run is otherwise an odd count, so
-         this card would sit alone in column 1 with an empty cell beside it.
-         Widening any earlier card just moves the hole. CSS has no selector
-         for "last item in a row", so the invariant is enforced at build time
-         instead - see check_panel_layout() in build_dashboard.py. Widening
-         this one also happens to suit it: 24 hourly labels are cramped at
-         half width. -->
-    <details class="glass wide">
-      <summary class="module-label">Kalshi · tomorrow's low market volume</summary>
-      <div class="estimate-row">
-        <span class="estimate-value">{{tomorrow_low_volume_total}}</span>
-        <span class="estimate-label">contracts traded, last 24h</span>
-      </div>
-      <div class="range-row">
-        <span class="range-label">Dollar volume (our estimate)</span>
-        <span class="range-values">{{tomorrow_low_volume_dollars_est}}</span>
-      </div>
-      {{tomorrow_low_volume_svg}}
-    </details>
-
-    <details class="glass wide">
-      <summary class="module-label">Next-day forecast · track record</summary>
-      <div class="perf-scroll">{{next_day_table}}</div>
-    </details>
-
-    <details class="glass" open>
-      <summary class="module-label">Weekly performance · high ({{weekly_days_with_data}} of {{weekly_days_requested}} days)</summary>
-      <div class="perf-scroll">{{weekly_high_table}}</div>
-      <div class="hint">Trailing 7 days, most recent first. Predictions only appear once calibration_log.py has logged them (recent addition) - actual/Kalshi columns work back further.</div>
-    </details>
-
-    <details class="glass wide">
-      <summary class="module-label">Weekly performance · low ({{weekly_days_with_data}} of {{weekly_days_requested}} days)</summary>
-      <div class="perf-scroll">{{weekly_low_table}}</div>
-    </details>
-
-    <details class="glass wide">
-      <summary class="module-label">Monthly performance · {{monthly_label}}</summary>
-      {{monthly_low_sample_note}}
-      <div class="module-label" style="margin-top: 4px;">High</div>
-      {{monthly_high_stats}}
-      <div class="module-label" style="margin-top: 16px;">Low</div>
-      {{monthly_low_stats}}
-      <div class="hint">Bias/MAE use the same (predicted − actual) sign convention as the backtest above. Positive bias means the model's prediction ran warm/high or late; negative means it ran cool/low or early.</div>
-    </details>
-
-    <details class="glass wide">
-      <summary class="module-label">Paper trading · strategies compared</summary>
-      <div class="module-label">Trailing 7 days</div>
-      {{weekly_strategy_comparison}}
-      <div class="module-label" style="margin-top: 22px;">{{monthly_label}}</div>
-      {{monthly_strategy_comparison}}
-      <div class="hint">Four independent decision rules, deliberately never summed into one number - each answers a different question, so a combined P&amp;L would be the average of four experiments rather than the result of any of them. <b>Edge-triggered</b> bets only when the model's probability disagrees with Kalshi by at least 15 points (shown here for the 1hr leg only; the 1hr-vs-2hr comparison is its own experiment and lives in the block below). <b>Unconditional</b> bets the bracket the model's point estimate falls into, every day, no edge required. The two <b>next-day advance</b> rows are the same positions split by how they ended: bought at the ask the evening before, then either sold at the bid early because the price moved our way, or carried into settlement and scored against the actual weather. Simulated only - no real orders, ever.</div>
-    </details>
-
-    <details class="glass wide">
-      <summary class="module-label">Paper trading · trailing 7 days</summary>
-      {{weekly_paper_trading}}
-      <div class="hint">Simulated only - no real orders placed. A bet is logged when the model's own (backtest-calibrated) probability disagrees with Kalshi's price by at least 15 points - independently at ~1hr and ~2hr before the predicted peak, so the two lead times can be compared rather than picking one upfront. Kept separate on purpose - see the two blocks below.</div>
-      <div class="module-label" style="margin-top: 16px;">Low market: always-bet-the-model vs. edge-gated</div>
-      {{weekly_low_strategy}}
-      <div class="hint">Low market only. "Edge-triggered" is the same 15-point-disagreement bet already counted above under "1hr before peak" (isolated here to just the low side, since the block above pools high and low together); "unconditional" instead bets every single day on whichever bracket the model's own point estimate falls into, no disagreement required. Comparing the two answers whether just following the model daily beats only betting when a real mispricing shows up. High doesn't get an unconditional mode - this comparison only applies to low.</div>
-    </details>
-
-    <details class="glass wide">
-      <summary class="module-label">Paper trading · {{monthly_label}}</summary>
-      {{monthly_paper_trading}}
-      <div class="module-label" style="margin-top: 16px;">Low market: always-bet-the-model vs. edge-gated</div>
-      {{monthly_low_strategy}}
-    </details>
-
-    <div class="glass">
-      <div class="module-label">Conditions</div>
-      <div class="stats">
-        <div class="stat">
-          <div class="label">Wind</div>
-          <div class="value">{{wind_mph}} mph</div>
-        </div>
-        <div class="stat">
-          <div class="label">Cloud cover</div>
-          <div class="value cloud-value">
-            {{cloud_icon_svg}}
-            <span>{{cloud_label}}</span>
+      <div class="glass">
+        <div class="module-label">Estimated hottest/coldest time of day</div>
+        <div class="hilo-detail-row">
+          <div class="hilo-detail">
+            <span class="hilo-detail-arrow hilo-arrow-high">↑</span>
+            <span class="hilo-value">{{daily_high}}°</span>
+            <span class="hilo-detail-caption">{{daily_high_caption}} · est. peak ~{{est_peak_time}}</span>
+            <span class="hilo-detail-caption hero-precision">{{daily_high_source_note}}</span>
+          </div>
+          <div class="hilo-detail">
+            <span class="hilo-detail-arrow hilo-arrow-low">↓</span>
+            <span class="hilo-value">{{daily_low}}°</span>
+            <span class="hilo-detail-caption">{{daily_low_caption}} · est. trough ~{{est_trough_time}}</span>
+            <span class="hilo-detail-caption hero-precision">{{daily_low_source_note}}</span>
           </div>
         </div>
-        <div class="stat">
-          <div class="label">Pressure</div>
-          <div class="value"><span class="chip {{pressure_class}}">{{pressure_label}}</span></div>
+        {{same_day_confidence_html}}
+        <div class="module-label" style="margin-top: 16px;">Actual so far today</div>
+        <div class="hilo-detail-row">
+          <div class="hilo-detail">
+            <span class="hilo-detail-arrow hilo-arrow-high">↑</span>
+            <span class="hilo-value">{{observed_high}}°</span>
+            <span class="hilo-detail-caption">recorded at {{observed_high_time}}</span>
+            <span class="hilo-detail-caption hero-precision">{{observed_high_precision_note}}</span>
+          </div>
+          <div class="hilo-detail">
+            <span class="hilo-detail-arrow hilo-arrow-low">↓</span>
+            <span class="hilo-value">{{observed_low}}°</span>
+            <span class="hilo-detail-caption">recorded at {{observed_low_time}}</span>
+            <span class="hilo-detail-caption hero-precision">{{observed_low_precision_note}}</span>
+          </div>
         </div>
-        <div class="stat">
-          <div class="label">Trend confidence</div>
-          <div class="value">{{confidence_pct}}%</div>
+        <div class="module-label" style="margin-top: 16px;">Yesterday</div>
+        <div class="hilo-detail-row">
+          <div class="hilo-detail">
+            <span class="hilo-detail-arrow hilo-arrow-high">↑</span>
+            <span class="hilo-value">{{yesterday_high}}°</span>
+            <span class="hilo-detail-caption">recorded at {{yesterday_high_time}}</span>
+          </div>
+          <div class="hilo-detail">
+            <span class="hilo-detail-arrow hilo-arrow-low">↓</span>
+            <span class="hilo-value">{{yesterday_low}}°</span>
+            <span class="hilo-detail-caption">recorded at {{yesterday_low_time}}</span>
+          </div>
         </div>
-        <div class="stat">
-          <div class="label">Marine push</div>
-          <div class="value"><span class="chip {{marine_push_class}}">{{marine_push_label}}</span></div>
-          <div class="perf-subtle" style="margin-top: 2px;">{{marine_push_meta}}</div>
-        </div>
-        <div class="stat">
-          <div class="label">Offshore flow</div>
-          <div class="value"><span class="chip {{offshore_flow_class}}">{{offshore_flow_label}}</span></div>
-          <div class="perf-subtle" style="margin-top: 2px;">{{offshore_flow_meta}}</div>
-        </div>
+        <div class="hint">{{yesterday_source_note}}</div>
       </div>
-      <div class="hint">Trend confidence is how much the model trusts its own short-term extrapolation right now - not confidence in the readings above. It's deliberately low near sunrise or the day's peak-heat hour, since the trend is about to reverse there regardless of how strong it looks right before. Marine push (coastal/strait pressure gradient) and offshore flow (interior gap-wind gradient) are two distinguishable patterns behind Seattle temperature swings - the latter is the mechanism behind most real heat events, not just solar heating. Both are still first-pass signals, not yet calibrated against real outcomes (see calibration log).</div>
-    </div>
 
-    <div class="glass">
-      <div class="module-label">Seattle (Fremont) · NWS gridpoint forecast</div>
-      <div class="estimate-row">
-        <span class="estimate-value">{{fremont_current_temp}}°</span>
-        <span class="estimate-label">{{fremont_condition_text}} · KBFI, {{fremont_obs_time}}</span>
-      </div>
-      <div class="range-row">
-        <span class="range-label">Wind</span>
-        <span class="range-values">{{fremont_wind_mph}} mph</span>
-      </div>
-      <div class="module-label" style="margin-top: 16px;">Today, per NWS</div>
-      <div class="hilo-detail-row">
-        <div class="hilo-detail">
-          <span class="hilo-detail-arrow hilo-arrow-high">↑</span>
-          <span class="hilo-value">{{fremont_forecast_high}}°</span>
-          <span class="hilo-detail-caption">forecast high ~{{fremont_forecast_high_time}}</span>
+      <div class="glass">
+        <div class="module-label">Conditions</div>
+        <div class="stats">
+          <div class="stat">
+            <div class="label">Wind</div>
+            <div class="value">{{wind_mph}} mph</div>
+          </div>
+          <div class="stat">
+            <div class="label">Cloud cover</div>
+            <div class="value cloud-value">
+              {{cloud_icon_svg}}
+              <span>{{cloud_label}}</span>
+            </div>
+          </div>
+          <div class="stat">
+            <div class="label">Pressure</div>
+            <div class="value"><span class="chip {{pressure_class}}">{{pressure_label}}</span></div>
+          </div>
+          <div class="stat">
+            <div class="label">Trend confidence</div>
+            <div class="value">{{confidence_pct}}%</div>
+          </div>
+          <div class="stat">
+            <div class="label">Marine push</div>
+            <div class="value"><span class="chip {{marine_push_class}}">{{marine_push_label}}</span></div>
+            <div class="perf-subtle" style="margin-top: 2px;">{{marine_push_meta}}</div>
+          </div>
+          <div class="stat">
+            <div class="label">Offshore flow</div>
+            <div class="value"><span class="chip {{offshore_flow_class}}">{{offshore_flow_label}}</span></div>
+            <div class="perf-subtle" style="margin-top: 2px;">{{offshore_flow_meta}}</div>
+          </div>
         </div>
-        <div class="hilo-detail">
-          <span class="hilo-detail-arrow hilo-arrow-low">↓</span>
-          <span class="hilo-value">{{fremont_forecast_low}}°</span>
-          <span class="hilo-detail-caption">forecast low ~{{fremont_forecast_low_time}}</span>
-        </div>
+        <div class="hint">Trend confidence is how much the model trusts its own short-term extrapolation right now - not confidence in the readings above. It's deliberately low near sunrise or the day's peak-heat hour, since the trend is about to reverse there regardless of how strong it looks right before. Marine push (coastal/strait pressure gradient) and offshore flow (interior gap-wind gradient) are two distinguishable patterns behind Seattle temperature swings - the latter is the mechanism behind most real heat events, not just solar heating. Both are still first-pass signals, not yet calibrated against real outcomes (see calibration log).</div>
       </div>
-      <div class="hint">A separate, closer-to-home comparison point - not part of the KSEA model above, and not blended into it. Sea-Tac Airport runs warmer than Fremont in summer (further from Lake Union/marine moderation), so treat these as two different microclimates. Current conditions are real observations from KBFI (Boeing Field, nearest full ASOS station - still ~5-6mi from Fremont). The high/low is NWS's own HRRR-based forecast for Fremont's actual coordinates, not this tool's in-house trend/gradient-network model - no backtesting or paper trading behind these numbers yet.</div>
-    </div>
+
+      <div class="glass">
+        <div class="module-label">Tomorrow's high</div>
+        <div class="estimate-row">
+          <span class="estimate-value"><span class="dot-warm"></span>{{tomorrow_high}}°</span>
+          <span class="estimate-label">{{tomorrow_meta}}</span>
+        </div>
+        <div class="confidence-bar" style="margin-top: 10px;">
+          <div class="confidence-fill" style="width: {{tomorrow_confidence_pct}}%;"></div>
+        </div>
+        <div class="hint">{{tomorrow_hint}}</div>
+
+        <div class="module-label" style="margin-top: 16px;">Tomorrow's low</div>
+        <div class="estimate-row">
+          <span class="estimate-value">{{tomorrow_low}}°</span>
+          <span class="estimate-label">{{tomorrow_low_meta}}</span>
+        </div>
+        <div class="confidence-bar" style="margin-top: 10px;">
+          <div class="confidence-fill" style="width: {{tomorrow_low_confidence_pct}}%;"></div>
+        </div>
+        <div class="hint">{{tomorrow_low_hint}}</div>
+      </div>
+
+    </section>
+
+    <section class="tab-panel" aria-label="Markets">
+      <div class="glass">
+        <div class="module-label">Kalshi · today's high market</div>
+        {{kalshi_high_rows}}
+        <div class="hint">Highlighted bracket is the one this tool's own estimate falls into - not a probability call, just a quick eyeball check against the market's pricing.</div>
+        <div class="hint">Bid/ask are the current highest buy offer and lowest sell offer for that bracket (last-price is the most recent trade, which can lag). A wide gap between them usually means a thin, less reliable market.</div>
+        <div class="kalshi-ticker">{{kalshi_high_ticker}}</div>
+      </div>
+
+      <details class="glass">
+        <summary class="module-label">Kalshi · today's high market volume</summary>
+        <div class="estimate-row">
+          <span class="estimate-value">{{high_volume_total}}</span>
+          <span class="estimate-label">contracts traded, last 24h</span>
+        </div>
+        <div class="range-row">
+          <span class="range-label">Dollar volume (our estimate)</span>
+          <span class="range-values">{{high_volume_dollars_est}}</span>
+        </div>
+        {{high_volume_svg}}
+        <div class="hint">Contract count matches Kalshi's own "Volume" figure; the dollar amount is our own estimate (contracts × that hour's average price) since Kalshi doesn't publish a dollar total directly. Applies to all four volume charts on this page (today's/tomorrow's high/low).</div>
+      </details>
+
+      <div class="glass">
+        <div class="module-label">Kalshi · today's low market</div>
+        {{kalshi_low_rows}}
+        <div class="hint">Trades stay manual for now - this is a side-by-side view for a human to review, not an automated signal.</div>
+        <div class="kalshi-ticker">{{kalshi_low_ticker}}</div>
+      </div>
+
+      <details class="glass">
+        <summary class="module-label">Kalshi · today's low market volume</summary>
+        <div class="estimate-row">
+          <span class="estimate-value">{{low_volume_total}}</span>
+          <span class="estimate-label">contracts traded, last 24h</span>
+        </div>
+        <div class="range-row">
+          <span class="range-label">Dollar volume (our estimate)</span>
+          <span class="range-values">{{low_volume_dollars_est}}</span>
+        </div>
+        {{low_volume_svg}}
+      </details>
+
+      <div class="glass">
+        <div class="module-label">Kalshi · tomorrow's high market</div>
+        {{kalshi_tomorrow_high_rows}}
+        <div class="hint">Highlighted bracket is the one this tool's tomorrow-high estimate falls into.</div>
+        <div class="kalshi-ticker">{{kalshi_tomorrow_high_ticker}}</div>
+      </div>
+
+      <details class="glass">
+        <summary class="module-label">Kalshi · tomorrow's high market volume</summary>
+        <div class="estimate-row">
+          <span class="estimate-value">{{tomorrow_high_volume_total}}</span>
+          <span class="estimate-label">contracts traded, last 24h</span>
+        </div>
+        <div class="range-row">
+          <span class="range-label">Dollar volume (our estimate)</span>
+          <span class="range-values">{{tomorrow_high_volume_dollars_est}}</span>
+        </div>
+        {{tomorrow_high_volume_svg}}
+      </details>
+
+      <div class="glass">
+        <div class="module-label">Kalshi · tomorrow's low market</div>
+        {{kalshi_tomorrow_low_rows}}
+        <div class="hint">Highlighted bracket is the one this tool's tomorrow-low estimate falls into.</div>
+        <div class="kalshi-ticker">{{kalshi_tomorrow_low_ticker}}</div>
+      </div>
+
+      <details class="glass">
+        <summary class="module-label">Kalshi · tomorrow's low market volume</summary>
+        <div class="estimate-row">
+          <span class="estimate-value">{{tomorrow_low_volume_total}}</span>
+          <span class="estimate-label">contracts traded, last 24h</span>
+        </div>
+        <div class="range-row">
+          <span class="range-label">Dollar volume (our estimate)</span>
+          <span class="range-values">{{tomorrow_low_volume_dollars_est}}</span>
+        </div>
+        {{tomorrow_low_volume_svg}}
+      </details>
+
+    </section>
+
+    <section class="tab-panel" aria-label="Track record">
+      <details class="glass wide">
+        <summary class="module-label">Next-day forecast · track record</summary>
+        <div class="perf-scroll">{{next_day_table}}</div>
+      </details>
+
+      <details class="glass" open>
+        <summary class="module-label">Weekly performance · high ({{weekly_days_with_data}} of {{weekly_days_requested}} days)</summary>
+        <div class="perf-scroll">{{weekly_high_table}}</div>
+        <div class="hint">Trailing 7 days, most recent first. Predictions only appear once calibration_log.py has logged them (recent addition) - actual/Kalshi columns work back further.</div>
+      </details>
+
+      <details class="glass wide">
+        <summary class="module-label">Weekly performance · low ({{weekly_days_with_data}} of {{weekly_days_requested}} days)</summary>
+        <div class="perf-scroll">{{weekly_low_table}}</div>
+      </details>
+
+      <details class="glass wide">
+        <summary class="module-label">Monthly performance · {{monthly_label}}</summary>
+        {{monthly_low_sample_note}}
+        <div class="module-label" style="margin-top: 4px;">High</div>
+        {{monthly_high_stats}}
+        <div class="module-label" style="margin-top: 16px;">Low</div>
+        {{monthly_low_stats}}
+        <div class="hint">Bias/MAE use the same (predicted − actual) sign convention as the backtest above. Positive bias means the model's prediction ran warm/high or late; negative means it ran cool/low or early.</div>
+      </details>
+
+    </section>
+
+    <section class="tab-panel" aria-label="Paper trading">
+      <details class="glass wide">
+        <summary class="module-label">Paper trading · strategies compared</summary>
+        <div class="module-label">Trailing 7 days</div>
+        {{weekly_strategy_comparison}}
+        <div class="module-label" style="margin-top: 22px;">{{monthly_label}}</div>
+        {{monthly_strategy_comparison}}
+        <div class="hint">Four independent decision rules, deliberately never summed into one number - each answers a different question, so a combined P&amp;L would be the average of four experiments rather than the result of any of them. <b>Edge-triggered</b> bets only when the model's probability disagrees with Kalshi by at least 15 points (shown here for the 1hr leg only; the 1hr-vs-2hr comparison is its own experiment and lives in the block below). <b>Unconditional</b> bets the bracket the model's point estimate falls into, every day, no edge required. The two <b>next-day advance</b> rows are the same positions split by how they ended: bought at the ask the evening before, then either sold at the bid early because the price moved our way, or carried into settlement and scored against the actual weather. Simulated only - no real orders, ever.</div>
+      </details>
+
+      <details class="glass wide">
+        <summary class="module-label">Paper trading · trailing 7 days</summary>
+        {{weekly_paper_trading}}
+        <div class="hint">Simulated only - no real orders placed. A bet is logged when the model's own (backtest-calibrated) probability disagrees with Kalshi's price by at least 15 points - independently at ~1hr and ~2hr before the predicted peak, so the two lead times can be compared rather than picking one upfront. Kept separate on purpose - see the two blocks below.</div>
+        <div class="module-label" style="margin-top: 16px;">Low market: always-bet-the-model vs. edge-gated</div>
+        {{weekly_low_strategy}}
+        <div class="hint">Low market only. "Edge-triggered" is the same 15-point-disagreement bet already counted above under "1hr before peak" (isolated here to just the low side, since the block above pools high and low together); "unconditional" instead bets every single day on whichever bracket the model's own point estimate falls into, no disagreement required. Comparing the two answers whether just following the model daily beats only betting when a real mispricing shows up. High doesn't get an unconditional mode - this comparison only applies to low.</div>
+      </details>
+
+      <details class="glass wide">
+        <summary class="module-label">Paper trading · {{monthly_label}}</summary>
+        {{monthly_paper_trading}}
+        <div class="module-label" style="margin-top: 16px;">Low market: always-bet-the-model vs. edge-gated</div>
+        {{monthly_low_strategy}}
+      </details>
+
+    </section>
+
+    <section class="tab-panel" aria-label="Fremont">
+      <div class="glass wide">
+        <div class="module-label">Seattle (Fremont) · NWS gridpoint forecast</div>
+        <div class="estimate-row">
+          <span class="estimate-value">{{fremont_current_temp}}°</span>
+          <span class="estimate-label">{{fremont_condition_text}} · KBFI, {{fremont_obs_time}}</span>
+        </div>
+        <div class="range-row">
+          <span class="range-label">Wind</span>
+          <span class="range-values">{{fremont_wind_mph}} mph</span>
+        </div>
+        <div class="module-label" style="margin-top: 16px;">Today, per NWS</div>
+        <div class="hilo-detail-row">
+          <div class="hilo-detail">
+            <span class="hilo-detail-arrow hilo-arrow-high">↑</span>
+            <span class="hilo-value">{{fremont_forecast_high}}°</span>
+            <span class="hilo-detail-caption">forecast high ~{{fremont_forecast_high_time}}</span>
+          </div>
+          <div class="hilo-detail">
+            <span class="hilo-detail-arrow hilo-arrow-low">↓</span>
+            <span class="hilo-value">{{fremont_forecast_low}}°</span>
+            <span class="hilo-detail-caption">forecast low ~{{fremont_forecast_low_time}}</span>
+          </div>
+        </div>
+        <div class="hint">A separate, closer-to-home comparison point - not part of the KSEA model above, and not blended into it. Sea-Tac Airport runs warmer than Fremont in summer (further from Lake Union/marine moderation), so treat these as two different microclimates. Current conditions are real observations from KBFI (Boeing Field, nearest full ASOS station - still ~5-6mi from Fremont). The high/low is NWS's own HRRR-based forecast for Fremont's actual coordinates, not this tool's in-house trend/gradient-network model - no backtesting or paper trading behind these numbers yet.</div>
+      </div>
+
+    </section>
 
     <div class="wide">
       <div class="module-label">Verify the data</div>
