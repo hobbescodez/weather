@@ -2177,6 +2177,12 @@
             "bid": 0.02,
             "ask": 0.03,
             "gain_vs_entry": -0.09
+          },
+          {
+            "at": "2026-08-15T09:15:00-07:00",
+            "bid": 0.01,
+            "ask": 0.02,
+            "gain_vs_entry": -0.1
           }
         ],
         "best_bid_seen": 0.09,
@@ -2387,6 +2393,12 @@
             "bid": 0.0,
             "ask": 0.01,
             "gain_vs_entry": -0.5
+          },
+          {
+            "at": "2026-08-15T09:15:00-07:00",
+            "bid": 0.0,
+            "ask": 0.01,
+            "gain_vs_entry": -0.5
           }
         ],
         "best_bid_seen": 0.45,
@@ -2485,7 +2497,7 @@
         "strategy": "next_day_advance",
         "trigger_type": "next_day_advance",
         "side": "high",
-        "status": "open",
+        "status": "cashed_out",
         "target_date": "2026-08-16",
         "market_ticker": "KXHIGHTSEA-26AUG16-B79.5",
         "event_ticker": "KXHIGHTSEA-26AUG16",
@@ -2516,10 +2528,16 @@
             "bid": 0.17,
             "ask": 0.18,
             "gain_vs_entry": -0.02
+          },
+          {
+            "at": "2026-08-15T09:15:00-07:00",
+            "bid": 0.22,
+            "ask": 0.23,
+            "gain_vs_entry": 0.03
           }
         ],
-        "best_bid_seen": 0.17,
-        "best_bid_seen_at": "2026-08-15T07:05:00-07:00",
+        "best_bid_seen": 0.22,
+        "best_bid_seen_at": "2026-08-15T09:15:00-07:00",
         "all_buckets": [
           {
             "label": "76\u00b0 or below",
@@ -2551,7 +2569,12 @@
             "floor_strike": 84,
             "cap_strike": null
           }
-        ]
+        ],
+        "exit_price": 0.22,
+        "exit_at": "2026-08-15T09:15:00-07:00",
+        "exit_gain_per_contract": 0.03,
+        "realized_gain": 0.0789,
+        "hours_held": 2.17
       },
       "low": {
         "strategy": "next_day_advance",
@@ -2585,6 +2608,12 @@
           },
           {
             "at": "2026-08-15T08:10:00-07:00",
+            "bid": 0.45,
+            "ask": 0.46,
+            "gain_vs_entry": -0.01
+          },
+          {
+            "at": "2026-08-15T09:15:00-07:00",
             "bid": 0.45,
             "ask": 0.46,
             "gain_vs_entry": -0.01
