@@ -3017,6 +3017,59 @@
           "cap_strike": null
         }
       ]
+    },
+    "high_unconditional": {
+      "trigger_type": "unconditional",
+      "side": "high",
+      "lead_time_hint": "1hr",
+      "simulated_bucket_chosen": "77\u00b0 to 78\u00b0",
+      "simulated_bucket_floor": 77,
+      "simulated_bucket_cap": 78,
+      "simulated_bucket_is_tail": false,
+      "simulated_entry_price": 0.04,
+      "simulated_stake": 0.5,
+      "point_estimate_f": 77.0,
+      "model_implied_probability": 0.0899,
+      "model_credible_probability": 0.0899,
+      "market_implied_probability": 0.04,
+      "edge_at_entry": 0.0499,
+      "credible_sigma_span": 1.5,
+      "estimated_range_low_f": 74.1,
+      "estimated_range_high_f": 79.9,
+      "hours_ahead_at_entry": 0.97,
+      "placed_at": "2026-08-16T15:05:00-07:00",
+      "all_buckets": [
+        {
+          "label": "76\u00b0 or below",
+          "floor_strike": null,
+          "cap_strike": 77
+        },
+        {
+          "label": "77\u00b0 to 78\u00b0",
+          "floor_strike": 77,
+          "cap_strike": 78
+        },
+        {
+          "label": "79\u00b0 to 80\u00b0",
+          "floor_strike": 79,
+          "cap_strike": 80
+        },
+        {
+          "label": "81\u00b0 to 82\u00b0",
+          "floor_strike": 81,
+          "cap_strike": 82
+        },
+        {
+          "label": "83\u00b0 to 84\u00b0",
+          "floor_strike": 83,
+          "cap_strike": 84
+        },
+        {
+          "label": "85\u00b0 or above",
+          "floor_strike": 84,
+          "cap_strike": null
+        }
+      ]
     }
   },
   "2026-08-17": {
@@ -3092,10 +3145,16 @@
             "bid": 0.31,
             "ask": 0.34,
             "gain_vs_entry": -0.03
+          },
+          {
+            "at": "2026-08-16T15:20:00-07:00",
+            "bid": 0.32,
+            "ask": 0.33,
+            "gain_vs_entry": -0.02
           }
         ],
-        "best_bid_seen": 0.31,
-        "best_bid_seen_at": "2026-08-16T06:55:00-07:00",
+        "best_bid_seen": 0.32,
+        "best_bid_seen_at": "2026-08-16T15:20:00-07:00",
         "all_buckets": [
           {
             "label": "76\u00b0 or below",
@@ -3197,6 +3256,12 @@
           },
           {
             "at": "2026-08-16T14:05:00-07:00",
+            "bid": 0.45,
+            "ask": 0.53,
+            "gain_vs_entry": -0.12
+          },
+          {
+            "at": "2026-08-16T15:20:00-07:00",
             "bid": 0.45,
             "ask": 0.53,
             "gain_vs_entry": -0.12
