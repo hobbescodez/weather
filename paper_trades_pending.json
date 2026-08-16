@@ -3062,6 +3062,12 @@
             "bid": 0.29,
             "ask": 0.34,
             "gain_vs_entry": -0.05
+          },
+          {
+            "at": "2026-08-16T10:00:00-07:00",
+            "bid": 0.28,
+            "ask": 0.3,
+            "gain_vs_entry": -0.06
           }
         ],
         "best_bid_seen": 0.31,
@@ -3140,10 +3146,16 @@
             "bid": 0.52,
             "ask": 0.55,
             "gain_vs_entry": -0.05
+          },
+          {
+            "at": "2026-08-16T10:00:00-07:00",
+            "bid": 0.53,
+            "ask": 0.61,
+            "gain_vs_entry": -0.04
           }
         ],
-        "best_bid_seen": 0.52,
-        "best_bid_seen_at": "2026-08-16T09:05:00-07:00",
+        "best_bid_seen": 0.53,
+        "best_bid_seen_at": "2026-08-16T10:00:00-07:00",
         "all_buckets": [
           {
             "label": "50\u00b0 or below",
