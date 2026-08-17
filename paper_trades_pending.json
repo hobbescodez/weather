@@ -3078,7 +3078,7 @@
         "strategy": "next_day_advance",
         "trigger_type": "next_day_advance",
         "side": "high",
-        "status": "open",
+        "status": "cashed_out",
         "target_date": "2026-08-17",
         "market_ticker": "KXHIGHTSEA-26AUG17-B79.5",
         "event_ticker": "KXHIGHTSEA-26AUG17",
@@ -3211,10 +3211,16 @@
             "bid": 0.35,
             "ask": 0.38,
             "gain_vs_entry": 0.01
+          },
+          {
+            "at": "2026-08-17T02:05:00-07:00",
+            "bid": 0.4,
+            "ask": 0.45,
+            "gain_vs_entry": 0.06
           }
         ],
-        "best_bid_seen": 0.36,
-        "best_bid_seen_at": "2026-08-16T22:20:00-07:00",
+        "best_bid_seen": 0.4,
+        "best_bid_seen_at": "2026-08-17T02:05:00-07:00",
         "all_buckets": [
           {
             "label": "76\u00b0 or below",
@@ -3246,7 +3252,12 @@
             "floor_strike": 84,
             "cap_strike": null
           }
-        ]
+        ],
+        "exit_price": 0.4,
+        "exit_at": "2026-08-17T02:05:00-07:00",
+        "exit_gain_per_contract": 0.06,
+        "realized_gain": 0.0882,
+        "hours_held": 19.17
       },
       "low": {
         "strategy": "next_day_advance",
