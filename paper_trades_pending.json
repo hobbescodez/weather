@@ -3473,6 +3473,59 @@
           "cap_strike": null
         }
       ]
+    },
+    "high_unconditional": {
+      "trigger_type": "unconditional",
+      "side": "high",
+      "lead_time_hint": "1hr",
+      "simulated_bucket_chosen": "79\u00b0 to 80\u00b0",
+      "simulated_bucket_floor": 79,
+      "simulated_bucket_cap": 80,
+      "simulated_bucket_is_tail": false,
+      "simulated_entry_price": 0.53,
+      "simulated_stake": 0.5,
+      "point_estimate_f": 79.0,
+      "model_implied_probability": 0.0764,
+      "model_credible_probability": 0.0764,
+      "market_implied_probability": 0.53,
+      "edge_at_entry": -0.4536,
+      "credible_sigma_span": 1.5,
+      "estimated_range_low_f": 75.5,
+      "estimated_range_high_f": 82.5,
+      "hours_ahead_at_entry": 1.28,
+      "placed_at": "2026-08-17T14:45:00-07:00",
+      "all_buckets": [
+        {
+          "label": "76\u00b0 or below",
+          "floor_strike": null,
+          "cap_strike": 77
+        },
+        {
+          "label": "77\u00b0 to 78\u00b0",
+          "floor_strike": 77,
+          "cap_strike": 78
+        },
+        {
+          "label": "79\u00b0 to 80\u00b0",
+          "floor_strike": 79,
+          "cap_strike": 80
+        },
+        {
+          "label": "81\u00b0 to 82\u00b0",
+          "floor_strike": 81,
+          "cap_strike": 82
+        },
+        {
+          "label": "83\u00b0 to 84\u00b0",
+          "floor_strike": 83,
+          "cap_strike": 84
+        },
+        {
+          "label": "85\u00b0 or above",
+          "floor_strike": 84,
+          "cap_strike": null
+        }
+      ]
     }
   },
   "2026-08-18": {
