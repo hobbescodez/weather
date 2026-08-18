@@ -3822,6 +3822,12 @@
             "bid": 0.37,
             "ask": 0.46,
             "gain_vs_entry": 0.02
+          },
+          {
+            "at": "2026-08-18T07:10:00-07:00",
+            "bid": 0.0,
+            "ask": 0.01,
+            "gain_vs_entry": -0.35
           }
         ],
         "best_bid_seen": 0.37,
@@ -3912,6 +3918,142 @@
           "cap_strike": null
         }
       ]
+    }
+  },
+  "2026-08-19": {
+    "next_day_advance": {
+      "high": {
+        "strategy": "next_day_advance",
+        "trigger_type": "next_day_advance",
+        "side": "high",
+        "status": "open",
+        "target_date": "2026-08-19",
+        "market_ticker": "KXHIGHTSEA-26AUG19-B77.5",
+        "event_ticker": "KXHIGHTSEA-26AUG19",
+        "simulated_bucket_chosen": "77\u00b0 to 78\u00b0",
+        "simulated_bucket_floor": 77,
+        "simulated_bucket_cap": 78,
+        "simulated_bucket_is_tail": false,
+        "simulated_entry_price": 0.3,
+        "entry_ask": 0.3,
+        "entry_bid": 0.25,
+        "entry_spread": 0.05,
+        "entry_last_price": 0.28,
+        "simulated_stake": 0.5,
+        "point_estimate_f": 77.0,
+        "projection_source": "nws_forecast",
+        "min_exit_gain": 0.03,
+        "opened_at": "2026-08-18T07:05:00-07:00",
+        "hours_before_target_date": 16.92,
+        "price_checks": [
+          {
+            "at": "2026-08-18T07:10:00-07:00",
+            "bid": 0.25,
+            "ask": 0.3,
+            "gain_vs_entry": -0.05
+          }
+        ],
+        "best_bid_seen": 0.25,
+        "best_bid_seen_at": "2026-08-18T07:05:00-07:00",
+        "all_buckets": [
+          {
+            "label": "74\u00b0 or below",
+            "floor_strike": null,
+            "cap_strike": 75
+          },
+          {
+            "label": "75\u00b0 to 76\u00b0",
+            "floor_strike": 75,
+            "cap_strike": 76
+          },
+          {
+            "label": "77\u00b0 to 78\u00b0",
+            "floor_strike": 77,
+            "cap_strike": 78
+          },
+          {
+            "label": "79\u00b0 to 80\u00b0",
+            "floor_strike": 79,
+            "cap_strike": 80
+          },
+          {
+            "label": "81\u00b0 to 82\u00b0",
+            "floor_strike": 81,
+            "cap_strike": 82
+          },
+          {
+            "label": "83\u00b0 or above",
+            "floor_strike": 82,
+            "cap_strike": null
+          }
+        ]
+      },
+      "low": {
+        "strategy": "next_day_advance",
+        "trigger_type": "next_day_advance",
+        "side": "low",
+        "status": "open",
+        "target_date": "2026-08-19",
+        "market_ticker": "KXLOWTSEA-26AUG19-B57.5",
+        "event_ticker": "KXLOWTSEA-26AUG19",
+        "simulated_bucket_chosen": "57\u00b0 to 58\u00b0",
+        "simulated_bucket_floor": 57,
+        "simulated_bucket_cap": 58,
+        "simulated_bucket_is_tail": false,
+        "simulated_entry_price": 0.38,
+        "entry_ask": 0.38,
+        "entry_bid": 0.33,
+        "entry_spread": 0.05,
+        "entry_last_price": 0.35,
+        "simulated_stake": 0.5,
+        "point_estimate_f": 57.0,
+        "projection_source": "nws_forecast",
+        "min_exit_gain": 0.03,
+        "opened_at": "2026-08-18T07:10:00-07:00",
+        "hours_before_target_date": 16.83,
+        "price_checks": [
+          {
+            "at": "2026-08-18T07:10:00-07:00",
+            "bid": 0.33,
+            "ask": 0.38,
+            "gain_vs_entry": -0.05
+          }
+        ],
+        "best_bid_seen": 0.33,
+        "best_bid_seen_at": "2026-08-18T07:10:00-07:00",
+        "all_buckets": [
+          {
+            "label": "50\u00b0 or below",
+            "floor_strike": null,
+            "cap_strike": 51
+          },
+          {
+            "label": "51\u00b0 to 52\u00b0",
+            "floor_strike": 51,
+            "cap_strike": 52
+          },
+          {
+            "label": "53\u00b0 to 54\u00b0",
+            "floor_strike": 53,
+            "cap_strike": 54
+          },
+          {
+            "label": "55\u00b0 to 56\u00b0",
+            "floor_strike": 55,
+            "cap_strike": 56
+          },
+          {
+            "label": "57\u00b0 to 58\u00b0",
+            "floor_strike": 57,
+            "cap_strike": 58
+          },
+          {
+            "label": "59\u00b0 or above",
+            "floor_strike": 58,
+            "cap_strike": null
+          }
+        ]
+      }
     }
   }
 }
