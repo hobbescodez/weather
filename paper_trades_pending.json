@@ -3744,10 +3744,16 @@
             "bid": 0.36,
             "ask": 0.45,
             "gain_vs_entry": 0.01
+          },
+          {
+            "at": "2026-08-17T18:10:00-07:00",
+            "bid": 0.37,
+            "ask": 0.45,
+            "gain_vs_entry": 0.02
           }
         ],
-        "best_bid_seen": 0.36,
-        "best_bid_seen_at": "2026-08-17T17:05:00-07:00",
+        "best_bid_seen": 0.37,
+        "best_bid_seen_at": "2026-08-17T18:10:00-07:00",
         "all_buckets": [
           {
             "label": "51\u00b0 or below",
