@@ -1084,5 +1084,25 @@
       "confidence_at_send": null,
       "skipped_missed_window": false
     }
+  },
+  "2026-08-20": {
+    "low": {
+      "predicted_peak_time_at_lock": "2026-08-20T06:12:00-07:00",
+      "window_start": "2026-08-20T05:12:00-07:00",
+      "hard_cutoff": "2026-08-20T05:52:00-07:00",
+      "checkpoints": [
+        "2026-08-20T05:12:00-07:00",
+        "2026-08-20T05:22:00-07:00",
+        "2026-08-20T05:32:00-07:00",
+        "2026-08-20T05:42:00-07:00",
+        "2026-08-20T05:52:00-07:00"
+      ],
+      "locked_at": "2026-08-19T07:10:00-07:00",
+      "sent": false,
+      "sent_at": null,
+      "message": null,
+      "confidence_at_send": null,
+      "skipped_missed_window": false
+    }
   }
 }
