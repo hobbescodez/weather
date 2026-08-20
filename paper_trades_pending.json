@@ -4322,6 +4322,12 @@
             "bid": 0.0,
             "ask": 0.01,
             "gain_vs_entry": -0.3
+          },
+          {
+            "at": "2026-08-19T23:05:00-07:00",
+            "bid": 0.0,
+            "ask": 0.01,
+            "gain_vs_entry": -0.3
           }
         ],
         "best_bid_seen": 0.27,
@@ -4616,6 +4622,12 @@
             "bid": 0.0,
             "ask": 0.01,
             "gain_vs_entry": -0.38
+          },
+          {
+            "at": "2026-08-19T23:05:00-07:00",
+            "bid": 0.0,
+            "ask": 0.01,
+            "gain_vs_entry": -0.38
           }
         ],
         "best_bid_seen": 0.39,
@@ -4876,6 +4888,36 @@
             "bid": 0.12,
             "ask": 0.16,
             "gain_vs_entry": -0.14
+          },
+          {
+            "at": "2026-08-19T23:05:00-07:00",
+            "bid": 0.14,
+            "ask": 0.18,
+            "gain_vs_entry": -0.12
+          },
+          {
+            "at": "2026-08-20T00:05:00-07:00",
+            "bid": 0.12,
+            "ask": 0.22,
+            "gain_vs_entry": -0.14
+          },
+          {
+            "at": "2026-08-20T05:20:00-07:00",
+            "bid": 0.04,
+            "ask": 0.05,
+            "gain_vs_entry": -0.22
+          },
+          {
+            "at": "2026-08-20T05:35:00-07:00",
+            "bid": 0.02,
+            "ask": 0.04,
+            "gain_vs_entry": -0.24
+          },
+          {
+            "at": "2026-08-20T09:10:00-07:00",
+            "bid": 0.02,
+            "ask": 0.04,
+            "gain_vs_entry": -0.24
           }
         ],
         "best_bid_seen": 0.24,
@@ -5001,6 +5043,207 @@
         "exit_gain_per_contract": 0.07,
         "realized_gain": 0.1094,
         "hours_held": 3.08
+      }
+    },
+    "low_unconditional": {
+      "trigger_type": "unconditional",
+      "side": "low",
+      "lead_time_hint": "1hr",
+      "simulated_bucket_chosen": "58\u00b0 to 59\u00b0",
+      "simulated_bucket_floor": 58,
+      "simulated_bucket_cap": 59,
+      "simulated_bucket_is_tail": false,
+      "simulated_entry_price": 0.65,
+      "simulated_stake": 0.5,
+      "point_estimate_f": 58.1,
+      "model_implied_probability": 0.0859,
+      "model_credible_probability": 0.0859,
+      "market_implied_probability": 0.65,
+      "edge_at_entry": -0.5641,
+      "credible_sigma_span": 1.5,
+      "estimated_range_low_f": 55.2,
+      "estimated_range_high_f": 61.0,
+      "hours_ahead_at_entry": 1.12,
+      "placed_at": "2026-08-20T05:05:00-07:00",
+      "all_buckets": [
+        {
+          "label": "51\u00b0 or below",
+          "floor_strike": null,
+          "cap_strike": 52
+        },
+        {
+          "label": "52\u00b0 to 53\u00b0",
+          "floor_strike": 52,
+          "cap_strike": 53
+        },
+        {
+          "label": "54\u00b0 to 55\u00b0",
+          "floor_strike": 54,
+          "cap_strike": 55
+        },
+        {
+          "label": "56\u00b0 to 57\u00b0",
+          "floor_strike": 56,
+          "cap_strike": 57
+        },
+        {
+          "label": "58\u00b0 to 59\u00b0",
+          "floor_strike": 58,
+          "cap_strike": 59
+        },
+        {
+          "label": "60\u00b0 or above",
+          "floor_strike": 59,
+          "cap_strike": null
+        }
+      ]
+    }
+  },
+  "2026-08-21": {
+    "next_day_advance": {
+      "high": {
+        "strategy": "next_day_advance",
+        "trigger_type": "next_day_advance",
+        "side": "high",
+        "status": "open",
+        "target_date": "2026-08-21",
+        "market_ticker": "KXHIGHTSEA-26AUG21-B81.5",
+        "event_ticker": "KXHIGHTSEA-26AUG21",
+        "simulated_bucket_chosen": "81\u00b0 to 82\u00b0",
+        "simulated_bucket_floor": 81,
+        "simulated_bucket_cap": 82,
+        "simulated_bucket_is_tail": false,
+        "simulated_entry_price": 0.25,
+        "entry_ask": 0.25,
+        "entry_bid": 0.23,
+        "entry_spread": 0.02,
+        "entry_last_price": 0.24,
+        "simulated_stake": 0.5,
+        "point_estimate_f": 81.0,
+        "projection_source": "nws_forecast",
+        "min_exit_gain": 0.03,
+        "opened_at": "2026-08-20T09:05:00-07:00",
+        "hours_before_target_date": 14.92,
+        "price_checks": [
+          {
+            "at": "2026-08-20T09:10:00-07:00",
+            "bid": 0.23,
+            "ask": 0.25,
+            "gain_vs_entry": -0.02
+          },
+          {
+            "at": "2026-08-20T13:05:00-07:00",
+            "bid": 0.23,
+            "ask": 0.24,
+            "gain_vs_entry": -0.02
+          }
+        ],
+        "best_bid_seen": 0.23,
+        "best_bid_seen_at": "2026-08-20T09:05:00-07:00",
+        "all_buckets": [
+          {
+            "label": "78\u00b0 or below",
+            "floor_strike": null,
+            "cap_strike": 79
+          },
+          {
+            "label": "79\u00b0 to 80\u00b0",
+            "floor_strike": 79,
+            "cap_strike": 80
+          },
+          {
+            "label": "81\u00b0 to 82\u00b0",
+            "floor_strike": 81,
+            "cap_strike": 82
+          },
+          {
+            "label": "83\u00b0 to 84\u00b0",
+            "floor_strike": 83,
+            "cap_strike": 84
+          },
+          {
+            "label": "85\u00b0 to 86\u00b0",
+            "floor_strike": 85,
+            "cap_strike": 86
+          },
+          {
+            "label": "87\u00b0 or above",
+            "floor_strike": 86,
+            "cap_strike": null
+          }
+        ]
+      },
+      "low": {
+        "strategy": "next_day_advance",
+        "trigger_type": "next_day_advance",
+        "side": "low",
+        "status": "open",
+        "target_date": "2026-08-21",
+        "market_ticker": "KXLOWTSEA-26AUG21-B59.5",
+        "event_ticker": "KXLOWTSEA-26AUG21",
+        "simulated_bucket_chosen": "59\u00b0 to 60\u00b0",
+        "simulated_bucket_floor": 59,
+        "simulated_bucket_cap": 60,
+        "simulated_bucket_is_tail": false,
+        "simulated_entry_price": 0.49,
+        "entry_ask": 0.49,
+        "entry_bid": 0.47,
+        "entry_spread": 0.02,
+        "entry_last_price": 0.43,
+        "simulated_stake": 0.5,
+        "point_estimate_f": 59.0,
+        "projection_source": "nws_forecast",
+        "min_exit_gain": 0.03,
+        "opened_at": "2026-08-20T09:10:00-07:00",
+        "hours_before_target_date": 14.83,
+        "price_checks": [
+          {
+            "at": "2026-08-20T09:10:00-07:00",
+            "bid": 0.47,
+            "ask": 0.49,
+            "gain_vs_entry": -0.02
+          },
+          {
+            "at": "2026-08-20T13:05:00-07:00",
+            "bid": 0.46,
+            "ask": 0.49,
+            "gain_vs_entry": -0.03
+          }
+        ],
+        "best_bid_seen": 0.47,
+        "best_bid_seen_at": "2026-08-20T09:10:00-07:00",
+        "all_buckets": [
+          {
+            "label": "52\u00b0 or below",
+            "floor_strike": null,
+            "cap_strike": 53
+          },
+          {
+            "label": "53\u00b0 to 54\u00b0",
+            "floor_strike": 53,
+            "cap_strike": 54
+          },
+          {
+            "label": "55\u00b0 to 56\u00b0",
+            "floor_strike": 55,
+            "cap_strike": 56
+          },
+          {
+            "label": "57\u00b0 to 58\u00b0",
+            "floor_strike": 57,
+            "cap_strike": 58
+          },
+          {
+            "label": "59\u00b0 to 60\u00b0",
+            "floor_strike": 59,
+            "cap_strike": 60
+          },
+          {
+            "label": "61\u00b0 or above",
+            "floor_strike": 60,
+            "cap_strike": null
+          }
+        ]
       }
     }
   }

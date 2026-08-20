@@ -405,6 +405,20 @@
       "target_time": "2026-08-20T04:12:00-07:00",
       "locked_at": "2026-08-19T07:10:00-07:00",
       "skipped_missed_window": false
+    },
+    "high": {
+      "predicted_peak_time_at_lock": "2026-08-20T15:59:00-07:00",
+      "target_time": "2026-08-20T13:59:00-07:00",
+      "locked_at": "2026-08-20T00:05:00-07:00",
+      "skipped_missed_window": false
+    }
+  },
+  "2026-08-21": {
+    "low": {
+      "predicted_peak_time_at_lock": "2026-08-21T06:13:00-07:00",
+      "target_time": "2026-08-21T04:13:00-07:00",
+      "locked_at": "2026-08-20T09:05:00-07:00",
+      "skipped_missed_window": false
     }
   }
 }
