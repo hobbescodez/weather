@@ -5296,7 +5296,7 @@
         "strategy": "next_day_advance",
         "trigger_type": "next_day_advance",
         "side": "low",
-        "status": "open",
+        "status": "cashed_out",
         "target_date": "2026-08-21",
         "market_ticker": "KXLOWTSEA-26AUG21-B59.5",
         "event_ticker": "KXLOWTSEA-26AUG21",
@@ -5399,10 +5399,16 @@
             "bid": 0.5,
             "ask": 0.57,
             "gain_vs_entry": 0.01
+          },
+          {
+            "at": "2026-08-21T00:30:00-07:00",
+            "bid": 0.53,
+            "ask": 0.6,
+            "gain_vs_entry": 0.04
           }
         ],
-        "best_bid_seen": 0.5,
-        "best_bid_seen_at": "2026-08-20T22:55:00-07:00",
+        "best_bid_seen": 0.53,
+        "best_bid_seen_at": "2026-08-21T00:30:00-07:00",
         "all_buckets": [
           {
             "label": "52\u00b0 or below",
@@ -5434,7 +5440,12 @@
             "floor_strike": 60,
             "cap_strike": null
           }
-        ]
+        ],
+        "exit_price": 0.53,
+        "exit_at": "2026-08-21T00:30:00-07:00",
+        "exit_gain_per_contract": 0.04,
+        "realized_gain": 0.0408,
+        "hours_held": 15.33
       }
     }
   }
