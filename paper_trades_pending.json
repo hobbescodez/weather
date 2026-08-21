@@ -5501,5 +5501,141 @@
         }
       ]
     }
+  },
+  "2026-08-22": {
+    "next_day_advance": {
+      "high": {
+        "strategy": "next_day_advance",
+        "trigger_type": "next_day_advance",
+        "side": "high",
+        "status": "open",
+        "target_date": "2026-08-22",
+        "market_ticker": "KXHIGHTSEA-26AUG22-B71.5",
+        "event_ticker": "KXHIGHTSEA-26AUG22",
+        "simulated_bucket_chosen": "71\u00b0 to 72\u00b0",
+        "simulated_bucket_floor": 71,
+        "simulated_bucket_cap": 72,
+        "simulated_bucket_is_tail": false,
+        "simulated_entry_price": 0.19,
+        "entry_ask": 0.19,
+        "entry_bid": 0.18,
+        "entry_spread": 0.01,
+        "entry_last_price": 0.19,
+        "simulated_stake": 0.5,
+        "point_estimate_f": 71.0,
+        "projection_source": "nws_forecast",
+        "min_exit_gain": 0.03,
+        "opened_at": "2026-08-21T06:45:00-07:00",
+        "hours_before_target_date": 17.25,
+        "price_checks": [
+          {
+            "at": "2026-08-21T06:45:00-07:00",
+            "bid": 0.18,
+            "ask": 0.19,
+            "gain_vs_entry": -0.01
+          }
+        ],
+        "best_bid_seen": 0.18,
+        "best_bid_seen_at": "2026-08-21T06:45:00-07:00",
+        "all_buckets": [
+          {
+            "label": "68\u00b0 or below",
+            "floor_strike": null,
+            "cap_strike": 69
+          },
+          {
+            "label": "69\u00b0 to 70\u00b0",
+            "floor_strike": 69,
+            "cap_strike": 70
+          },
+          {
+            "label": "71\u00b0 to 72\u00b0",
+            "floor_strike": 71,
+            "cap_strike": 72
+          },
+          {
+            "label": "73\u00b0 to 74\u00b0",
+            "floor_strike": 73,
+            "cap_strike": 74
+          },
+          {
+            "label": "75\u00b0 to 76\u00b0",
+            "floor_strike": 75,
+            "cap_strike": 76
+          },
+          {
+            "label": "77\u00b0 or above",
+            "floor_strike": 76,
+            "cap_strike": null
+          }
+        ]
+      },
+      "low": {
+        "strategy": "next_day_advance",
+        "trigger_type": "next_day_advance",
+        "side": "low",
+        "status": "open",
+        "target_date": "2026-08-22",
+        "market_ticker": "KXLOWTSEA-26AUG22-B58.5",
+        "event_ticker": "KXLOWTSEA-26AUG22",
+        "simulated_bucket_chosen": "58\u00b0 to 59\u00b0",
+        "simulated_bucket_floor": 58,
+        "simulated_bucket_cap": 59,
+        "simulated_bucket_is_tail": false,
+        "simulated_entry_price": 0.4,
+        "entry_ask": 0.4,
+        "entry_bid": 0.39,
+        "entry_spread": 0.01,
+        "entry_last_price": 0.46,
+        "simulated_stake": 0.5,
+        "point_estimate_f": 58.0,
+        "projection_source": "nws_forecast",
+        "min_exit_gain": 0.03,
+        "opened_at": "2026-08-21T06:45:00-07:00",
+        "hours_before_target_date": 17.25,
+        "price_checks": [
+          {
+            "at": "2026-08-21T06:45:00-07:00",
+            "bid": 0.39,
+            "ask": 0.4,
+            "gain_vs_entry": -0.01
+          }
+        ],
+        "best_bid_seen": 0.39,
+        "best_bid_seen_at": "2026-08-21T06:45:00-07:00",
+        "all_buckets": [
+          {
+            "label": "51\u00b0 or below",
+            "floor_strike": null,
+            "cap_strike": 52
+          },
+          {
+            "label": "52\u00b0 to 53\u00b0",
+            "floor_strike": 52,
+            "cap_strike": 53
+          },
+          {
+            "label": "54\u00b0 to 55\u00b0",
+            "floor_strike": 54,
+            "cap_strike": 55
+          },
+          {
+            "label": "56\u00b0 to 57\u00b0",
+            "floor_strike": 56,
+            "cap_strike": 57
+          },
+          {
+            "label": "58\u00b0 to 59\u00b0",
+            "floor_strike": 58,
+            "cap_strike": 59
+          },
+          {
+            "label": "60\u00b0 or above",
+            "floor_strike": 59,
+            "cap_strike": null
+          }
+        ]
+      }
+    }
   }
 }
