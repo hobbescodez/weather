@@ -1180,5 +1180,42 @@
       "confidence_at_send": null,
       "skipped_missed_window": false
     }
+  },
+  "2026-09-09": {
+    "high": {
+      "predicted_peak_time_at_lock": "2026-09-09T15:40:00-07:00",
+      "window_start": "2026-09-09T14:40:00-07:00",
+      "hard_cutoff": "2026-09-09T15:20:00-07:00",
+      "checkpoints": [
+        "2026-09-09T15:10:00-07:00",
+        "2026-09-09T15:20:00-07:00"
+      ],
+      "locked_at": "2026-09-09T15:00:00-07:00",
+      "sent": false,
+      "sent_at": null,
+      "message": null,
+      "confidence_at_send": null,
+      "skipped_missed_window": false
+    }
+  },
+  "2026-09-10": {
+    "low": {
+      "predicted_peak_time_at_lock": "2026-09-10T06:40:00-07:00",
+      "window_start": "2026-09-10T05:40:00-07:00",
+      "hard_cutoff": "2026-09-10T06:20:00-07:00",
+      "checkpoints": [
+        "2026-09-10T05:40:00-07:00",
+        "2026-09-10T05:50:00-07:00",
+        "2026-09-10T06:00:00-07:00",
+        "2026-09-10T06:10:00-07:00",
+        "2026-09-10T06:20:00-07:00"
+      ],
+      "locked_at": "2026-09-09T15:00:00-07:00",
+      "sent": false,
+      "sent_at": null,
+      "message": null,
+      "confidence_at_send": null,
+      "skipped_missed_window": false
+    }
   }
 }
